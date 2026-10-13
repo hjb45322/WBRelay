@@ -10,6 +10,7 @@
   R6 /api/usage 响应新增 usd_cny_rate 字段（既有字段不受影响）
   R7 汇率不写进 usage.jsonl 历史行（历史行只有 token 数）
   R8 数据隔离自检：DATA 指向自己创建的临时目录；不碰真实 %APPDATA%
+  R9 性能回归（1.0.1）：批量聚合不得逐行读配置（load_settings 调用数为常数级）
 
 测试数据全部由本脚本写入临时目录（假模型名 / 假供应商名 / 假 Key），
 **不读取、不复制** %APPDATA%\WBRelay 或任何在用数据；不占用 8789。
@@ -235,6 +236,43 @@ def main():
     check("R7b 历史行不含 usd_cny_rate（费率只展示时按当前值算）",
           "usd_cny_rate" not in stored, repr(sorted(stored.keys())))
     check("R7c 历史行不含成本字段", "cost" not in stored, repr(sorted(stored.keys())))
+
+    # ---- R9 性能回归（1.0.1）：批量聚合不得逐行读配置 ----
+    # 1.0.0 的回归点：_cost_per_request() 逐行调用 usd_cny_rate() → load_settings() →
+    # 深拷贝整份 settings.json —— 3.4 万行就是 3.4 万次深拷贝（实测占聚合循环 96%）。
+    # 这里用**调用计数**断言，与机器快慢无关：N 行聚合的 load_settings 调用必须是常数级。
+    N_ROWS = 200
+    isolate.write_usage([usage_row(at=1700000000.0 + i) for i in range(N_ROWS)])
+    _usage.load_usage_rows()              # 文件已换（mtime/size 变）→ 让缓存跟上
+    calls = [0]
+    real_load_settings = _usage.load_settings
+
+    def counting_load_settings():
+        calls[0] += 1
+        return real_load_settings()
+
+    _usage.load_settings = counting_load_settings
+    try:
+        calls[0] = 0
+        _usage.usage_summary()
+        n_summary = calls[0]
+        calls[0] = 0
+        _usage.usage_recent(page_size=20)
+        n_recent = calls[0]
+        calls[0] = 0
+        one_row_cost = _usage._cost_per_request(row, None, 7.2)   # 显式传汇率：不该读配置
+        n_explicit = calls[0]
+    finally:
+        _usage.load_settings = real_load_settings
+
+    check("R9a %d 行聚合读配置为常数级（<= 8 次，不随行数增长）" % N_ROWS,
+          n_summary <= 8,
+          "调用 %d 次 / %d 行（逐行读会变成 %d 次）" % (n_summary, N_ROWS, N_ROWS))
+    check("R9b 明细分页同样不逐行读配置（<= 8 次）",
+          n_recent <= 8, "调用 %d 次 / 每页 20 条（逐行读会变成 20 次）" % n_recent)
+    check("R9c 显式传入 rate 时一次都不读配置，且成本口径不变",
+          n_explicit == 0 and one_row_cost == round(usd * 7.2, 4),
+          "调用 %d 次 / cost=%r" % (n_explicit, one_row_cost))
 
     # ---- R8 再次隔离自检 ----
     try:

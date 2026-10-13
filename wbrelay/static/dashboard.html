@@ -1763,18 +1763,31 @@ function loadUsageRefreshSetting(){
 function startUsageAutoRefresh(){
   stopUsageAutoRefresh();
   if(!USAGE_REFRESH_SEC) return;   // 0 = 关闭自动刷新，只保留手动切换页签时的单次加载
-  _usageTimer = setInterval(function(){ loadUsage(); }, USAGE_REFRESH_SEC * 1000);
+  _usageTimer = setInterval(function(){
+    if(!USAGE_INFLIGHT) loadUsage();   // 上一轮还没回来就不叠加（响应慢时不再堆成一串）
+  }, USAGE_REFRESH_SEC * 1000);
 }
 function stopUsageAutoRefresh(){ if(_usageTimer){ clearInterval(_usageTimer); _usageTimer = null; } }
 
+/* 用量请求的序号与在途计数（见 docs/方案-用量看板性能.md）：
+   · USAGE_SEQ      只有最新一次请求的结果允许渲染。否则旧的自动刷新晚于「筛选 / 切范围」
+                    返回时，会用未筛选的数据覆盖新结果，还会把 _curUsagePage 改回旧页码；
+   · USAGE_INFLIGHT 自动刷新据此避让在途请求，不再每 5 秒叠一个。 */
+var USAGE_SEQ = 0, USAGE_INFLIGHT = 0;
+function usageSettle(){ USAGE_INFLIGHT = Math.max(USAGE_INFLIGHT - 1, 0); }
 function loadUsage(){
-  api("/api/usage?" + usageQuery(_curUsagePage)).then(function(res){
+  var seq = ++USAGE_SEQ;
+  USAGE_INFLIGHT++;
+  return api("/api/usage?" + usageQuery(_curUsagePage)).then(function(res){
+    if(seq !== USAGE_SEQ) return;      // 过期响应：丢弃，绝不渲染
     if(res.status !== 200) return;
     var v = res.json;
     if(v.usd_cny_rate) USD_CNY_RATE = v.usd_cny_rate;   // 后端同一来源，不在这里另写常数
     renderUsage(v);
     renderFilters(v.filters || {suppliers:[], models:[]});
-  });
+  }, function(){
+    /* 网络失败：吞掉，避免一次抖动留下未处理的拒绝；在途计数由下面统一归位 */
+  }).then(usageSettle, usageSettle);
 }
 var _filtersSig = "";   // 候选集签名：未变化时不重建 DOM（避免自动刷新打断下拉操作）
 function renderFilters(f){
@@ -1804,8 +1817,10 @@ function renderFilters(f){
 }
 function renderUsage(v){
   var k = v.kpi || {};
-  var totalReq = (k.requests||0) + (k.errors||0);
-  var okReq = k.requests || 0;
+  /* kpi.requests 已经含失败行，成功率分母不能再加一次 errors（否则与下方
+     「按模型 / 按供应商」表格的 requests - errors 口径不一致）。 */
+  var totalReq = k.requests || 0;
+  var okReq = Math.max(totalReq - (k.errors||0), 0);
   var okPct = totalReq > 0 ? (okReq / totalReq * 100).toFixed(1) : "100.0";
   el("kpis").innerHTML =
     '<div class="kpi"><div class="k">请求数</div><div class="v">'+k.requests+'</div><div class="s">成功率 '+okPct+'% · 失败 '+k.errors+'</div></div>' +
@@ -1906,7 +1921,9 @@ function renderRecent(rc){
     function goto(p){
       if(p < 1 || p > rc.pages) return;
       _curUsagePage = p;
+      var seq = ++USAGE_SEQ;              // 与自动刷新共用序号：后发的请求赢
       api("/api/usage?" + usageQuery(p)).then(function(r){
+        if(seq !== USAGE_SEQ) return;     // 过期响应（例如期间又切了筛选）丢弃
         if(r.status === 200){ renderRecent(r.json.recent); scrollToRecentTop(); }
       });
     }

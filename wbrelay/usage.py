@@ -221,7 +221,7 @@ def load_usage_rows():
         return rows
 
 
-def _cost_per_request(r, profs=None):
+def _cost_per_request(r, profs=None, rate=None):
     """按 OpenRouter 公开价估算单请求成本（人民币）。无价格档案返回 None。
 
     汇率取配置项 `usd_cny_rate`（默认 7.2，取值 0.1~100，非法值回落默认），
@@ -229,7 +229,9 @@ def _cost_per_request(r, profs=None):
     展示时一律按当前费率重算，改费率对全部历史记录立即生效。
 
     profs 为已加载的模型档案 dict（批量调用时传入避免每行重复 load_profiles）；
-    rate 为本次聚合统一使用的汇率（同上，避免每行重复读配置）。
+    rate 为本次聚合统一使用的汇率（同上，避免每行重复读配置）——**批量聚合必须传**：
+    缺省时每次调用都会走 `usd_cny_rate()` → `load_settings()` → 深拷贝整份配置，
+    逐行调用就退化成 O(N) 次深拷贝（见 docs/方案-用量看板性能.md）。
     """
     model = str(r.get("model") or "")
     if not model:
@@ -245,7 +247,9 @@ def _cost_per_request(r, profs=None):
     ct = r.get("cached_tokens") or 0
     non_cached = max(it - ct, 0)
     cost_usd = non_cached * pp + ct * crp + ot * cp
-    return round(cost_usd * usd_cny_rate(), 4)
+    if rate is None:
+        rate = usd_cny_rate()   # 仅在调用方未统一传入时自取（单行调用路径）
+    return round(cost_usd * rate, 4)
 
 
 def usage_summary(since=None, until=None, prices=None, supplier=None, model=None, rows=None):
@@ -279,6 +283,7 @@ def usage_summary(since=None, until=None, prices=None, supplier=None, model=None
     by_model = {}
     by_supplier = {}
     profs = load_profiles()  # 预取一次，避免聚合循环内每行重复加载
+    rate = usd_cny_rate()    # 汇率同理：逐行取 = 每行深拷贝一份配置（1.0.0 的性能回归点）
     for r in filt:
         model = str(r.get("model") or "?")
         realm = str(r.get("realm") or "none")
@@ -299,7 +304,7 @@ def usage_summary(since=None, until=None, prices=None, supplier=None, model=None
         if tt:
             kpi["ttft_sum_ms"] += tt
             kpi["ttft_count"] += 1
-        cost = _cost_per_request(r, profs)
+        cost = _cost_per_request(r, profs, rate)
         if cost:
             kpi["total_cost"] += cost
         mm = by_model.setdefault(model, {"model": model, "requests": 0, "errors": 0,
@@ -378,6 +383,9 @@ def usage_recent(since=None, until=None, page=1, page_size=20, supplier=None, mo
         rows = load_usage_rows()
     sup_cfg = supplier_config_names()
     sup_alias = supplier_aliases()
+    # 档案与汇率都在列表生成外取一次：明细每页最多 100 行，同样不该每行各读一次配置
+    profs = load_profiles()
+    rate = usd_cny_rate()
     filt = []
     for r in rows:
         at = r.get("at") or 0
@@ -419,7 +427,7 @@ def usage_recent(since=None, until=None, page=1, page_size=20, supplier=None, mo
         "cached_tokens": r.get("cached_tokens"),
         "ttft_ms": r.get("ttft_ms"),
         "elapsed_ms": r.get("elapsed_ms"),
-        "cost": _cost_per_request(r),
+        "cost": _cost_per_request(r, profs, rate),
         "error": bool(r.get("error")),
         "status": r.get("status"),
         "message": r.get("message"),

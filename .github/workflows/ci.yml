@@ -52,6 +52,7 @@ jobs:
           python tests/test_catalog_guard.py
           python tests/test_window_state.py
           python tests/test_usage_filters.py
+          python tests/test_cost_rate.py
           python tests/test_supplier_label.py
           python tests/test_atomic_writes.py
 

@@ -2,6 +2,49 @@
 
 本文件记录面向使用者的变更。
 
+## 1.0.1 — 2026-10-14 用量看板性能回归修复
+
+### 修复
+
+- **用量看板在「本周 / 本月 / 全部」与按供应商、模型筛选下要等 5~8 秒（性能回归）**：
+  1.0.0 把汇率改成配置项 `usd_cny_rate` 时，`_cost_per_request()` 结尾的
+  `round(cost_usd * 7.2, 4)` 换成了 `round(cost_usd * usd_cny_rate(), 4)` —— 而它处在
+  **逐行的聚合循环**里，`usd_cny_rate()` 每次都要 `load_settings()` → **深拷贝整份
+  `settings.json`**：3.4 万行就是 3.4 万次深拷贝，实测占该循环耗时的 96%。
+  1.0.0 的 `_cost_per_request` docstring 其实已经写了「rate 为本次聚合统一使用的汇率
+  （同上，避免每行重复读配置）」，但函数签名里没有 `rate` 参数 —— 属漏做。
+  修法：`_cost_per_request(r, profs=None, rate=None)` 新增 `rate` 形参；
+  `usage_summary()` / `usage_recent()` 在循环外取一次汇率并传入。
+
+  实测（同一份 3.4 万行数据、同一解释器、只读隔离目录）：
+
+  | 操作 | 1.0.0 | 1.0.1 |
+  |---|---|---|
+  | `usage_summary(全部)` | 5.80s | **0.31s** |
+  | `/api/usage?range=all` | 5.68s | **0.22s** |
+  | `range=all&supplier=<占比最大的供应商>` | 5.70s | **0.24s** |
+  | `range=today` | 0.37s | **0.03s** |
+
+  回归测试：`tests/test_cost_rate.py` 新增 R9 —— 把 `wbrelay.usage.load_settings` 换成
+  计数器，断言 N 行聚合对配置的读取次数是**常数级**（修复前 = 每行一次）；该脚本同时
+  纳入 CI（此前只在 `CONTRIBUTING.md` 的自检清单里，CI 没跑，所以这次回归没被拦住）。
+
+- **自动刷新与筛选互相打架（前端）**：5 秒定时刷新不等上一次返回，慢响应会越堆越多；
+  而且旧的刷新晚于「筛选 / 切范围」的请求返回时，会用**未筛选**的数据覆盖新结果，
+  并经 `renderRecent()` 把明细页码改回旧值（数字与表格来回跳）。
+  修法：自动刷新改成「上一轮没回来就不发新的」（在途计数），`loadUsage()` 与明细翻页
+  共用请求序号，**只有最新一次的结果允许渲染**。
+
+- **KPI「成功率」分母重复计失败**：`kpi.requests` 本身已含失败行，前端又加了一次
+  `errors` 当分母。改为 `(requests - errors) / requests`，与「按模型 / 按供应商」
+  表格里 `requests - errors` 的口径统一。
+
+### 变更
+
+- 版本号 `1.0.0` → `1.0.1`（`wbrelay/__init__.py`、`pyproject.toml`、README 状态行）
+- 方案文档：`docs/方案-用量看板性能.md`
+- CI：单元与护栏测试步骤新增 `python tests/test_cost_rate.py`
+
 ## 1.0.0 — 2026-10-14 首次公开发布
 
 从私人定制版重建为可公开发布的独立项目。**版本号由开发期的 `2.2.0` 改为 `1.0.0`** ——
