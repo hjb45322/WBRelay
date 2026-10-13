@@ -1,7 +1,12 @@
 name: CI
 
 on:
+  # 只对**分支**触发：标签不必重复跑一遍（同一提交已在分支上验过），
+  # 而且 actions/checkout 检出标签时**不创建 refs/tags/***，会让
+  # tools/scan_sensitive.py 把标注标签对象误判成「refs 之外的对象」而误报失败。
+  # （2026-10-14 首发打 v1.0.0 时踩到，见 CHANGELOG）
   push:
+    branches: ["**"]
   pull_request:
 
 # 中文输出：GitHub Actions 的 Windows 运行器默认控制台是 cp1252，中文会被降级成 "?"。
