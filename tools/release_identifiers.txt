@@ -17,8 +17,8 @@
 # 生成条目的唯一入口：
 #   python tools/scan_sensitive.py --hash <标识原文>
 #   python tools/scan_sensitive.py --hash <邮箱> --author
-pending-owner-confirmation|vendor|sha256:26e86092f401ee457d270e87acc92182bae0f3fbeb86963c1a140357cabdadf2|13|绊线：该私有上游标识已从仓库文本移除；一旦再次出现，发布扫描必须失败
-pending-owner-confirmation|vendor|sha256:d754cc54dc1de6d8c09fc39dab2a173c9d5ecfb6b79521c3a20d17b44bede1c8|9|绊线：同上（该名称的缩写形式）
+pending-owner-confirmation|vendor|sha256:6e4455557c46850b4390db5d4ca7f415bff3fa40ad8593b74a76154b45e83e24|13|绊线：该私有上游标识已从仓库文本移除；一旦再次出现，发布扫描必须失败
+pending-owner-confirmation|vendor|sha256:141de3607294359efa20824d76e730c9664ad02074e0531cbc79e4400b02be6a|9|绊线：同上（该名称的缩写形式）
 #
 # 署名：**采用集体署名，不登记任何个人身份**（2026-10-13 决定）。
 #   · 本仓库历史已改写为 `WBRelay contributors <noreply@wbrelay.invalid>`；

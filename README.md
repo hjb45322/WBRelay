@@ -410,8 +410,8 @@ python tools/restart-gateway.py --port 18789   # 指定端口
 配置键（`upstream_*`）、端口行为与对外接口语义均未改变。
 
 `tools/release_identifiers.txt` 保留原词条作为**绊线**，但**只存 `sha256:<hex>` 摘要与字符长度，
-不写明文**（这份清单本身会随发布一起走）；扫描器按 token 滑窗比对摘要，名称一旦再次出现，
-发布扫描立即失败。生成条目：
+不写明文**（这份清单本身会随发布一起走）；扫描器按 token 滑窗比对摘要，**比对大小写不敏感**
+（摘要按 `str.lower()` 折叠生成）——名称以任意大小写再次出现，工作树扫描立即阻断。生成条目：
 
 ```powershell
 python tools\scan_sensitive.py --hash <标识原文>          # vendor 条目
@@ -429,8 +429,8 @@ python tools\scan_sensitive.py
 
 | 范围 | 结果 |
 |---|---|
-| 工作树 | `CRED=0`；`PATH` 命中**全部**落在 `_internal/`（登记在 `tools/publish_excludes.txt`）—— 清单外的文件 0 命中 |
-| Git 历史 | 逐提交 `file:line` 扫描（refs + reflog + 悬空对象） |
+| 工作树 | `CRED=0`；`PATH` 命中**全部**落在 `_internal/`（登记在 `tools/publish_excludes.txt`）—— 清单外的文件 0 命中。取数范围 = 扩展名白名单 **+ 无扩展名文本文件**（`.gitignore` / `LICENSE` 之类，二进制按 NUL 探测跳过）|
+| Git 历史 | 逐提交 `file:line` 扫描（refs + reflog + 悬空对象）。**已知 1 处**：第一个提交里的旧命名遗留行（`.gitignore`，2026-10-14 已从 HEAD 删除）。历史命中只报告、不阻断 —— 本仓库不重写历史，细节见下 |
 | 署名 | 集体署名；无「未登记为 approved」的邮箱 |
 | 退出码 | `0`=可发布信号齐全；`1`=有命中 / 未批准标识 / 未确认署名 / 残留旧对象；`2`=清单缺失或不可用（fail closed） |
 

@@ -16,6 +16,12 @@
          * pending-owner-confirmation 未批准（命中 → 发布扫描失败，不隐藏、不静默）
          清单缺失/为空/格式错 → 直接 fail closed（退出码 2）
          清单里**只存标识原文的 SHA-256 与长度，不存明文**（清单本身会公开发布）
+         比对按 `str.lower()` 折叠（大小写不敏感）：只防「原文照抄」挡不住全小写 /
+         全大写这类变体；摘要一律用 `--hash` 生成（规则见 vendor_digest()）
+  SCOPE  工作树扫描的文件范围 = 文本扩展名白名单（TEXT_EXT）**或无扩展名**：
+         `.gitignore` / `.gitattributes` / `LICENSE` / `Dockerfile` 这类文件曾因
+         `os.path.splitext()` 返回空扩展名而被整份跳过（真实漏报）。无扩展名文件先做
+         NUL 探测，二进制跳过。历史扫描走 `git grep -I`，本来就没有这个洞。
   AUTHOR Git 作者身份元数据（姓名/邮箱）：**只出类型、计数与提交位置，不回显原文**
          作者邮箱未登记为 approved 时**阻断发布**（署名要所有者决定，不默认放行）
   ORPHAN 只被 reflog 指着、或已经悬空的对象（`git fsck --unreachable --no-reflogs`）：
@@ -69,6 +75,14 @@ TOKEN_RE = re.compile(r"[0-9A-Za-z_\u4e00-\u9fff.\-/]+")
 TEXT_EXT = {".py", ".js", ".md", ".html", ".bat", ".cmd", ".sh", ".ps1",
             ".spec", ".toml", ".json", ".yml", ".yaml", ".txt", ".cfg", ".ini"}
 SKIP_DIRS = {".git", "__pycache__", "build", "dist", "node_modules", ".venv"}
+# 目录名后缀同样跳过：`*.egg-info` / `*.dist-info` 是构建生成物，内容派生自
+# README 与源码（**源头本身在扫描范围内**），而发布副本只拷 git 跟踪文件、
+# 它们也登记在 .gitignore 里 —— 与 build/ dist/ 完全同类，不必逐字符扫。
+SKIP_DIR_SUFFIXES = (".egg-info", ".dist-info")
+# 二进制探测窗口：无扩展名文件只看前 8 KiB 有没有 NUL（见 _read_text_or_none）。
+# `os.path.splitext(".gitignore")` 的扩展名是空串（前导点不算分隔），单靠 TEXT_EXT
+# 白名单会把这类文件整份跳过 —— 真实漏报就是这么来的。
+BINARY_PROBE_BYTES = 8 * 1024
 
 # 关键词拆开拼装，避免本文件自己被扫到
 _PREFIX = "s" + "k-"
@@ -192,10 +206,23 @@ def term_digest(text):
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
 
 
+def vendor_digest(term):
+    """VENDOR 标识的摘要：**大小写不敏感** —— 原文与比对窗口都先 `str.lower()` 再哈希。
+
+    只防「原文照抄」挡不住 `Vendor` / `VENDOR` / `vendor` 这类变体，而真实漏报正是一处
+    全小写的遗留行。折叠规则用 `str.lower()`，与扫描器其余部分一致（作者邮箱本来就先 lower()）。
+    清单里的摘要必须用 `--hash` 生成；折叠规则一旦变化，旧摘要会**静默失效**，必须同步重算。
+    边界（如实说明，不假装覆盖）：非 ASCII 的特殊大小写（如土耳其语 'İ'）不做完整 casefold；
+    条目标识都是 ASCII 名称，够用。窗口长度仍按**原文**字符数取。
+    """
+    return term_digest(str(term).lower())
+
+
 def hash_entry(term, status=IDENTIFIER_STATUS_PENDING, kind=IDENTIFIER_KIND_VENDOR, note=""):
     """把一条标识原文转成清单条目（只留哈希与长度，不留明文）。"""
     term = str(term)
-    return {"kind": kind, "status": status, "digest": term_digest(term),
+    digest = vendor_digest(term) if kind == IDENTIFIER_KIND_VENDOR else term_digest(term)
+    return {"kind": kind, "status": status, "digest": digest,
             "length": len(term), "term": "", "note": note}
 
 
@@ -276,7 +303,8 @@ def match_identifiers(line, identifiers):
 
     哈希条目用滑窗比对：标识可能长在更长的 token 内部（`<标识>.py`、`<标识>2API`），
     所以按条目登记的字符长度在 token 上取窗口算 SHA-256，而不是整 token 比对。
-    明文条目只可能来自命令行 `--vendor`（不落盘），按子串处理。
+    比对**大小写不敏感**（两边都过 `vendor_digest()`）。
+    明文条目只可能来自命令行 `--vendor`（不落盘），按大小写不敏感的子串处理。
     """
     hits = []
     for entry in identifiers:
@@ -284,7 +312,7 @@ def match_identifiers(line, identifiers):
         if entry.get("kind", IDENTIFIER_KIND_VENDOR) != IDENTIFIER_KIND_VENDOR:
             continue
         if entry.get("term"):
-            if entry["term"] in line:
+            if entry["term"].lower() in line.lower():
                 hits.append(entry)
             continue
         n = int(entry.get("length") or 0)
@@ -296,7 +324,7 @@ def match_identifiers(line, identifiers):
             if len(token) < n:
                 continue
             for i in range(len(token) - n + 1):
-                if term_digest(token[i:i + n]) == digest:
+                if vendor_digest(token[i:i + n]) == digest:
                     found = True
                     break
             if found:
@@ -318,21 +346,57 @@ def scan_text(text, where, identifiers, results):
             results.append((vendor_kind(entry["status"]), where, i))
 
 
-def scan_tree(identifiers):
-    """扫工作树里的文本文件（按扩展名）。清单只含哈希，因此不需要 skip_paths。"""
+def _skip_dir(name):
+    """该目录是否整棵跳过（源码/发布内容之外的生成物与缓存）。"""
+    return name in SKIP_DIRS or name.endswith(SKIP_DIR_SUFFIXES)
+
+
+def is_scanned_text(name):
+    """工作树扫描的文件范围：文本扩展名白名单 **或 无扩展名**。
+
+    为什么把「无扩展名」单列一类：`os.path.splitext(".gitignore")` → `('', '.gitignore')`，
+    扩展名是空串，落不进 TEXT_EXT —— 这类文件（`.gitignore` / `.gitattributes` / `LICENSE` /
+    `Dockerfile` 之类）曾被整份跳过，成了真实漏报。二进制另有 NUL 探测兜底。
+    注意：白名单本身不扩大 —— 非文本扩展名（`.png` / `.in` 之类）依旧不扫。
+    """
+    ext = os.path.splitext(name)[1].lower()
+    return ext in TEXT_EXT or ext == ""
+
+
+def _read_text_or_none(full):
+    """读文本用于扫描；二进制 / 读不动 → None（跳过）。
+
+    先读前 BINARY_PROBE_BYTES 字节做 NUL 探测：无扩展名的可执行文件、压缩包之类
+    不该被当文本读进来（白名单里的扩展名本来就都是文本）。
+    """
+    try:
+        with open(full, "rb") as fh:
+            head = fh.read(BINARY_PROBE_BYTES)
+            if b"\0" in head:
+                return None
+            return (head + fh.read()).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def scan_tree(identifiers, root=None):
+    """扫工作树里的文本文件（扩展名白名单 + 无扩展名）。清单只含哈希，不需要 skip_paths。
+
+    `root` 默认仓库根；测试用它指向临时目录，避免往仓库里写探针文件。
+    """
     results = []
-    for base, dirs, names in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+    base_root = root or ROOT
+    for base, dirs, names in os.walk(base_root):
+        dirs[:] = [d for d in dirs if not _skip_dir(d)]
         for n in names:
+            if not is_scanned_text(n):
+                continue
             full = os.path.join(base, n)
-            if os.path.splitext(full)[1].lower() not in TEXT_EXT:
+            text = _read_text_or_none(full)
+            if text is None:
                 continue
-            rel = os.path.relpath(full, ROOT)
-            try:
-                with open(full, "r", encoding="utf-8", errors="replace") as fh:
-                    scan_text(fh.read(), rel, identifiers, results)
-            except Exception:
-                continue
+            rel = os.path.relpath(full, base_root)
+            scan_text(text, rel, identifiers, results)
     return results
 
 
@@ -588,7 +652,9 @@ def main():
             print("  待所有者确认：%s 条目（%s）" % (e["kind"], e["note"] or "未批准"))
     print("发布排除清单：%s（%d 项）" % (args.excludes, len(excludes)))
 
-    print("工作树范围：已跟踪文件 + 未跟踪文本文件（按扩展名扫，排除：%s）" % ", ".join(sorted(SKIP_DIRS)))
+    skipped = sorted(SKIP_DIRS) + ["*" + s for s in SKIP_DIR_SUFFIXES]
+    print("工作树范围：扩展名白名单 + 无扩展名的文本文件（二进制跳过；排除目录：%s）"
+          % ", ".join(skipped))
     tree_results = scan_tree(identifiers)
     tree_counts = summarize("工作树（已跟踪 + 未跟踪）", tree_results, args.show)
     internal = [r for r in tree_results if is_internal_doc(r[1], excludes)]

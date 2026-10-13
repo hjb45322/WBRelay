@@ -19,6 +19,9 @@
   C8  发布排除清单是唯一来源（tools/publish_excludes.txt）
   C9  refs 之外的对象：reflog 可达的提交与悬空对象都能被发现
   C10 署名门禁：作者邮箱未登记为 approved → 阻断；登记后放行
+  C11 工作树取数范围：无扩展名文本文件（.gitignore / LICENSE / Dockerfile 形态）要扫；
+      无扩展名二进制、白名单外扩展名、*.egg-info 构建生成物跳过（范围不扩大）
+  C12 标识比对大小写不敏感（含 --vendor 明文条目）：摘要按 str.lower() 折叠后比对
 
 隔离：测试只读仓库文件，临时 git 仓库建在本测试自己的临时根里。
 
@@ -299,6 +302,64 @@ def main():
     check("C5c 普通发布文件不算内部资料", sc.is_internal_doc("README.md") is False)
     check("C5d 内部资料名册非空（前缀至少一条）",
           len(sc.INTERNAL_DOC_PREFIXES) >= 1)
+
+    # ---- C11 工作树取数范围：无扩展名文本要扫；二进制 / 白名单外 / 构建生成物跳过 ----
+    check("C11a 无扩展名文本在扫描范围内（.gitignore / LICENSE / Dockerfile 形态）",
+          all(sc.is_scanned_text(n) for n in
+              (".gitignore", ".gitattributes", "LICENSE", "Dockerfile", "README.md")),
+          repr([n for n in (".gitignore", "LICENSE", "Dockerfile") if not sc.is_scanned_text(n)]))
+    check("C11b 白名单外的扩展名仍不扫（范围没有被扩大）",
+          not any(sc.is_scanned_text(n) for n in ("a.png", "a.exe", "x.in", "y.tar")),
+          repr([n for n in ("a.png", "a.exe", "x.in", "y.tar") if sc.is_scanned_text(n)]))
+
+    probe_root = tempfile.mkdtemp(prefix="wbrelay-scan-tree-")
+    try:
+        cred = "wb_password=" + Q + PROBE_PWD + Q + chr(10)
+
+        def _put(rel, data):
+            full = os.path.join(probe_root, rel)
+            parent = os.path.dirname(full)
+            if parent and not os.path.isdir(parent):
+                os.makedirs(parent)
+            payload = data if isinstance(data, bytes) else data.encode("utf-8")
+            with io.open(full, "wb") as fh:
+                fh.write(payload)
+
+        _put(".gitignore", cred)                          # 无扩展名文本
+        _put("Dockerfile", cred)                          # 无扩展名文本
+        _put("bin-noext", b"\x00\x01" + cred.encode("utf-8"))  # 无扩展名二进制
+        _put("logo.png", cred)                            # 白名单外的扩展名
+        _put("pkg.egg-info" + os.sep + "PKG-INFO", cred)  # 构建生成物目录
+        hits = sc.scan_tree([], root=probe_root)
+        where = sorted(set(w for _k, w, _l in hits))
+        check("C11c 无扩展名文本文件里的假凭据会被扫出来（修复前整份跳过）",
+              where == [".gitignore", "Dockerfile"], repr(where))
+        check("C11d 无扩展名二进制 / 白名单外扩展名 / *.egg-info 都不报",
+              not any(w.startswith(("bin-noext", "logo.png", "pkg.egg-info")) for w in where),
+              repr(where))
+    finally:
+        if os.path.basename(probe_root).startswith("wbrelay-scan-tree-") and \
+                os.path.normcase(os.path.dirname(os.path.abspath(probe_root))) == \
+                os.path.normcase(os.path.abspath(tempfile.gettempdir())):
+            __import__("shutil").rmtree(probe_root, ignore_errors=True)
+
+    # ---- C12 标识比对大小写不敏感（真实漏报：全小写的遗留行躲过驼峰条目）----
+    entry = sc.hash_entry("ProbeVendor")
+    check("C12a 登记原文命中", len(sc.match_identifiers("see ProbeVendor here", [entry])) == 1)
+    check("C12b 全小写命中", len(sc.match_identifiers("see probevendor here", [entry])) == 1)
+    check("C12c 全大写命中", len(sc.match_identifiers("SEE PROBEVENDOR HERE", [entry])) == 1)
+    check("C12d 长在更长 token 里也命中", len(sc.match_identifiers("probevendorXYZ", [entry])) == 1)
+    check("C12e 摘要按折叠后的原文生成（--hash 也是这条路径）",
+          entry["digest"] == sc.term_digest("probevendor"))
+    check("C12f 滑窗长度仍按原文记", entry["length"] == len("ProbeVendor"))
+    check("C12g 连字符变体不命中（只折叠大小写，不改分隔符）",
+          sc.match_identifiers("probe-vendor", [entry]) == [])
+    results = []
+    sc.scan_text("PROBE-TERM here", "probe.txt",
+                 [{"term": "probe-term", "status": sc.IDENTIFIER_STATUS_PENDING, "note": ""}],
+                 results)
+    check("C12h 命令行 --vendor 的明文条目同样大小写不敏感",
+          results == [(sc.VENDOR_KIND_PENDING, "probe.txt", 1)], repr(results))
 
     print("\n===== 敏感信息扫描器：%d 通过 / %d 失败 =====" % (len(PASS), len(FAIL)))
     for f in FAIL:
