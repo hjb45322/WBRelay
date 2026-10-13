@@ -1,0 +1,31 @@
+# 发布标识清单 —— tools/scan_sensitive.py 的显式输入（发布门禁）。
+#
+# 格式：<status>|<kind>|<payload>|<extra>|<note>
+#   status = approved                   所有者已批准随发布保留（命中仍报告计数，但不阻断）
+#            pending-owner-confirmation  未批准 —— 命中会让发布扫描失败（不隐藏、不静默）
+#   kind   = vendor  供应商 / 客户 / 上游标识（会出现在文本里的名字）
+#              payload = sha256:<hex>   标识原文的 SHA-256
+#              extra   = 标识的字符长度（在 token 上滑窗比对用，按 Unicode 字符数算）
+#            author  提交里的作者邮箱
+#              payload = sha256:<hex>   邮箱**统一小写后**的 SHA-256
+#              extra   = -（忽略）
+#
+# 为什么只存哈希：本文件会随公开发布一起走，写上明文等于把要防的东西印在仓库里。
+# 坦白说明：哈希只挡「明文与搜索引擎索引」，不是密码学保护 —— 猜得到原文的人可以自行验证。
+# 需要更强保护就不要用仓库内清单，改用仓库外的清单：--identifiers <仓库外路径>。
+#
+# 生成条目的唯一入口：
+#   python tools/scan_sensitive.py --hash <标识原文>
+#   python tools/scan_sensitive.py --hash <邮箱> --author
+pending-owner-confirmation|vendor|sha256:26e86092f401ee457d270e87acc92182bae0f3fbeb86963c1a140357cabdadf2|13|绊线：该私有上游标识已从仓库文本移除；一旦再次出现，发布扫描必须失败
+pending-owner-confirmation|vendor|sha256:d754cc54dc1de6d8c09fc39dab2a173c9d5ecfb6b79521c3a20d17b44bede1c8|9|绊线：同上（该名称的缩写形式）
+#
+# 署名：**采用集体署名，不登记任何个人身份**（2026-10-13 决定）。
+#   · 本仓库历史已改写为 `WBRelay contributors <noreply@wbrelay.invalid>`；
+#     用 `.invalid`（RFC 2606 保留域名）是因为 GitHub 上**真有**叫 noreply 的账号，
+#     用 users.noreply.github.com 会把提交挂到那个陌生人名下（2026-10-14 换掉）；
+#   · 这里没有 approved|author 条目 —— 扫描器因此会一直提示「未登记为 approved 的署名」，
+#     那是**应然状态**：本仓库是私有基线，提交作者身份不对外公开。
+#     真正对外的是发布副本，它由 tools/make_publish_copy.py --init-history 生成，
+#     一样写集体署名，扫描结果 exit 0。
+#   · 若将来想改成公开个人署名：用 --hash <邮箱> --author 生成条目并登记为 approved。

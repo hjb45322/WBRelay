@@ -1,0 +1,42 @@
+# ---- 运行时数据（默认写入 %APPDATA%\WBRelay，不落在仓库内）----
+data/
+settings.json
+usage.jsonl
+models_cache.json
+model_profiles.json
+ide_backups/
+backups/
+*.log
+*.bak
+*.bak_*
+manifest*.jsonl
+
+# ---- PyInstaller ----
+build/
+dist/
+*.exe
+*.spec
+!WBRelay.spec
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---- 测试临时产物 / E2E 截图（生成物，不入库）----
+tests/_shots/
+tests/shots_*/
+tests/_tmp_*/
+e2e-shots/
+*.png.tmp
+
+# ---- 本地临时 / 工作目录 ----
+*.tmp
+*.bak
+
+# ---- 内部资料（本机证据 / 运维记录 / 私有校验工具）----
+# 这些文件记录的是本机接管、事故、审查与发布施工过程（含真实路径与注册表原文），
+# 只留作本地存档：不进版本控制、不随发布、不参与扫描门禁之外的任何自动化。
+/_internal/

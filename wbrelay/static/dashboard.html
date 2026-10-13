@@ -1,0 +1,2407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WBRelay · 多供应商自动路由</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%230A1E4F'/%3E%3Cstop offset='1' stop-color='%231BA7E6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='16' height='16' rx='3.5' fill='url(%23g)'/%3E%3Cpolygon points='2.8,8 5.6,3.5 10.4,3.5 13.2,8 10.4,12.5 5.6,12.5' fill='%23fff'/%3E%3Cpolygon points='8,1.2 6.4,4.4 9.6,4.4' fill='%23fff'/%3E%3Cpolygon points='8,14.8 6.4,11.6 9.6,11.6' fill='%23fff'/%3E%3Cline x1='2.8' y1='8' x2='1.6' y2='8' stroke='%23fff' stroke-width='1'/%3E%3Cline x1='13.2' y1='8' x2='14.4' y2='8' stroke='%23fff' stroke-width='1'/%3E%3Ccircle cx='1.0' cy='8' r='0.7' fill='%23fff'/%3E%3Ccircle cx='15.0' cy='8' r='0.7' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --bg:#f4f6f8; --panel:#ffffff; --panel2:#eef1f4; --fg:#1f2328; --dim:#59636e;
+    --line:#d7dce1; --accent:#1f883d; --accent2:#2da44e; --danger:#d1242f;
+    --cool-bg:#fff8c5; --cool-fg:#9a6700; --think:#8250df; --mono:Consolas,Menlo,monospace;
+  }
+  html[data-theme="dark"]{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2128; --fg:#e6edf3; --dim:#8b949e;
+    --line:#30363d; --accent:#238636; --accent2:#2ea043; --danger:#f85149;
+    --cool-bg:#3a2f00; --cool-fg:#d4a72c; --think:#bc8cff;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+  *{user-select:text !important; -webkit-user-select:text !important}
+  html,body{height:100%;overflow:hidden}
+  .app{max-width:1416px;margin:0 auto;padding:18px 22px 40px}
+
+  /* 顶栏 */
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:600}
+  .brand .glyph{display:block;flex-shrink:0;border-radius:4px}
+  .stats{display:flex;gap:12px;font-size:12px;color:var(--dim);flex-wrap:wrap}
+  .stats b{color:var(--fg);font-weight:600}
+  .spacer{flex:1}
+
+  /* Tab 导航 */
+  .tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:0}
+  .tab{padding:7px 18px;min-width:132px;text-align:center;white-space:nowrap;border-radius:8px;cursor:pointer;font-size:13px;color:var(--dim);background:transparent;border:none}
+  .tab:hover{color:var(--fg);background:var(--panel2)}
+  .tab.active{background:var(--accent);color:#fff;font-weight:600}
+  .page{display:none;flex:1;min-height:0;overflow:hidden;flex-direction:column}
+  .page.show{display:flex}
+  .scrollbox{flex:1;min-height:0;overflow-y:auto}
+  .app{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .top{flex-shrink:0}
+
+  /* 按钮 */
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px;transition:.15s}
+  button:hover{border-color:var(--dim)}
+  button.primary{background:var(--accent);border-color:var(--accent2);color:#fff}
+  button.primary:hover{background:var(--accent2);border-color:var(--accent2)}
+  button.danger{color:var(--danger);border-color:var(--line)}
+  button.danger:hover{background:var(--panel2);border-color:var(--danger)}
+  .btn-ico{width:11px;height:11px;fill:currentColor;margin-right:5px;vertical-align:-1px}
+  button.ghost{background:transparent;border-color:transparent;color:var(--dim)}
+  button.ghost:hover{color:var(--fg);background:var(--panel2)}
+  button.mini{padding:3px 9px;font-size:12px}
+
+  /* 供应商卡片 */
+  .cards{display:flex;flex-direction:column;gap:10px}
+  .cards-frame{border:2px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--panel)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px;box-shadow:0 1px 2px #00000008}
+  .card.dragging{opacity:.92;border-style:dashed;border-color:var(--accent);box-shadow:0 8px 24px #00000038;z-index:9;background:var(--panel2)}
+  .card.disabled{opacity:.55}
+  .drag{cursor:grab;color:var(--dim);font-size:16px;user-select:none;touch-action:none;padding:6px 4px;border-radius:6px}
+  .drag:hover{color:var(--accent);background:var(--panel2)}
+  .card-main{flex:1;min-width:0}
+  .card-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card-name{font-weight:600;font-size:14px}
+  .card-sub{margin-top:3px;font-size:12px;color:var(--dim);display:flex;gap:12px;flex-wrap:wrap}
+  .card-sub .url{color:#0969da}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 8px;font-size:11px;color:var(--dim);font-family:var(--mono)}
+  /* 操作区：状态组 ｜ 操作组（测速／编辑／复制）｜ 危险操作（删除） */
+  .card-ops{display:flex;align-items:center;gap:10px;flex-shrink:0}
+  .ops-status{display:flex;align-items:center;gap:8px}
+  .ops-actions{display:flex;align-items:center;gap:6px}
+  .ops-sep{width:1px;height:20px;background:var(--line);flex-shrink:0}
+  .card-ops button{padding:4px 10px;font-size:12px;border-radius:7px;background:var(--panel2);border:1px solid var(--line);color:var(--fg);white-space:nowrap}
+  .card-ops button:hover{border-color:var(--accent2);color:var(--accent2)}
+  .card-ops button.danger{color:var(--danger)}
+  .card-ops button.danger:hover{border-color:var(--danger);color:var(--danger);background:var(--panel)}
+  /* 测速结果固定槽位：内容变化不会顶动后面的按钮 */
+  .ping-out{width:56px;flex:0 0 56px;text-align:right;font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+  .ping-out.ok{color:var(--accent2);font-weight:600}
+  .ping-out.err{color:var(--danger);font-weight:600}
+
+  /* 开关 */
+  .switch{width:38px;height:22px;border-radius:11px;background:var(--line);position:relative;cursor:pointer;transition:.15s;flex-shrink:0}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.15s;box-shadow:0 1px 2px #00000044}
+  .switch.on{background:var(--accent2)}
+  .switch.on::after{left:18px}
+
+  /* 徽章 */
+  .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;line-height:1.5;white-space:nowrap}
+  .badge.on{background:#dafbe1;color:#1a7f37;border:1px solid #a6d8b1}
+  .badge.off{background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+  .badge.cool{background:var(--cool-bg);color:var(--cool-fg);border:1px solid #d4a72c55}
+  .badge.warn{background:rgba(210,153,34,.14);color:#b8871a;border:1px solid rgba(210,153,34,.4)}
+  .badge.neutral{background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+  .badge.free{background:rgba(38,187,130,.15);color:#26bb82}
+  .badge.rate{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+  .badge.vis{background:rgba(38,187,130,.15);color:#26bb82}
+  .badge.txt{background:var(--panel2);color:var(--dim)}
+  .badge.think{background:rgba(130,80,223,.14);color:var(--think);border:1px solid rgba(130,80,223,.35);font-weight:600}
+  .badge-effort{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;line-height:1.4;white-space:nowrap;margin:1px 2px;background:rgba(124,58,237,.12);color:var(--think);border:1px solid rgba(124,58,237,.3);font-weight:600;font-family:var(--mono)}
+
+  /* 表格 */
+  .table-scroll{overflow-x:auto}
+  table.data-cards{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13px}
+  table.data-cards th{background:var(--panel2);padding:9px 12px;font-size:12px;color:var(--dim);text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  #tbl-recent{overflow:visible}
+  #tbl-recent thead th{position:sticky;top:0;z-index:2}
+  table.data-cards td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.data-cards tr:last-child td{border-bottom:none}
+  td.mono{font-family:var(--mono)}
+  .empty{color:var(--dim);text-align:center;padding:26px !important}
+
+  /* KPI */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .k{font-size:12px;color:var(--dim)}
+  .kpi .v{font-size:22px;font-weight:600;margin-top:2px}
+  .kpi .s{font-size:11px;color:var(--dim);margin-top:2px}
+  .kpi.accent .v{color:var(--accent2)}
+  .kpi.think .v{color:var(--think)}
+  .tkbar{background:var(--panel2);border-radius:3px;height:5px;margin:2px auto 3px;max-width:110px}
+  .tkbar i{display:block;height:5px;border-radius:3px;background:var(--accent)}
+
+  /* 分段按钮（范围） */
+  .seg{display:flex;gap:4px;background:var(--panel);padding:3px;border-radius:8px;border:1px solid var(--line)}
+  .seg button{border:none;background:transparent;padding:5px 12px;font-size:12px;color:var(--dim);border-radius:6px}
+  .seg button.active{background:var(--accent);color:#fff;font-weight:600}
+
+  /* 用量看板页：页面固定不滚动，仅「请求明细」表格区域内部滚动 */
+  #pg-usage.show{display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:contain}
+  #pg-usage .sec-title,#pg-usage .usage-filters,#pg-usage .kpis{flex-shrink:0}
+  .usage-stack{display:flex;flex-direction:column;gap:16px;min-height:0;flex:1}
+  .usage-card{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px 16px;display:flex;flex-direction:column;min-height:0}
+  #summary-card{flex-shrink:0}
+  #recent-card{flex:1;min-height:0}
+  #recent-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+  #recent-card .pager{flex-shrink:0}
+  .usage-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;flex-shrink:0}
+  .usage-card-head h2{font-size:15px;font-weight:600;line-height:1.4}
+  .usage-card-head em{font-style:normal;font-size:12px;font-weight:400;color:var(--dim)}
+  .usage-hint{font-size:12px;color:var(--dim)}
+  .summary-seg{background:var(--panel2);padding:3px}
+  .summary-seg button{padding:6px 13px}
+  .summary-seg button em{font-style:normal;font-size:11px;opacity:.72;margin-left:2px}
+  .summary-pane{display:none}
+  .summary-pane.show{display:block;max-height:42vh;overflow-y:auto}
+  .usage-card.collapsed .summary-pane{display:none !important}
+  .usage-card.collapsed .usage-card-head{margin-bottom:0}
+  #btn-summary-toggle{margin-left:auto;white-space:nowrap}
+  .usage-card .table-scroll{border-radius:9px}
+  .usage-card table.data-cards{border:1px solid var(--line);border-radius:9px}
+
+  /* 区块标题 */
+  .sec-title{font-size:15px;font-weight:600;margin:0 0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sec-title .hint{font-size:12px;font-weight:400;color:var(--dim)}
+  .sec-title em{font-style:normal;font-size:12px;font-weight:400;color:var(--dim)}
+
+  /* 模型配置页：标题 → IDE 卡片 → 重新拉取行 → 统计 → 分组大容器
+     （docs/方案-模型配置页布局.md） */
+  #pg-models .ph-title{flex-shrink:0;font-size:15px;font-weight:600;line-height:1.4;margin:0 0 10px}
+  #pg-models .ph-box{flex-shrink:0;margin-bottom:12px}
+  #pg-models .ph-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #pg-models .ph-desc{flex:1 1 300px;min-width:0;font-size:12px;color:var(--dim);line-height:1.6}
+  #pg-models .ph-desc span{white-space:nowrap}
+  /* 分隔符绑在前一个片段尾部：窄屏换行时不会出现行首孤零的「·」 */
+  #pg-models .ph-desc span:not(:last-child)::after{content:"·";margin:0 6px}
+  #pg-models .ph-stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .mm-chip{display:inline-flex;align-items:baseline;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:11px;color:var(--dim);white-space:nowrap}
+  .mm-chip b{font-size:12px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
+  @media (max-width:980px){
+    /* 窄屏：标题 / IDE 卡片 / 拉取容器与模型列表合并为一个滚动区，
+       避免列表区被固定页头压到只剩几像素 */
+    #pg-models.show{overflow-y:auto}
+    #pg-models #models-box{flex:0 0 auto;overflow:visible;min-height:0}
+  }
+
+  /* IDE 客户端卡片组（模型配置页顶部，固定不滚动） */
+  .ides-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.ides-strip{display:contents}
+  #ides-group{flex-shrink:0;margin-bottom:14px}
+  #ides-group .ides-row{margin-bottom:0;padding:12px 16px 14px}
+  .ide-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;flex:1 1 200px;min-width:0;max-width:240px;display:flex;flex-direction:column;gap:8px;box-shadow:0 1px 2px #00000008}
+  .ide-card.not-detected{opacity:.5}
+  .ide-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .ide-card-name{font-weight:600;font-size:13px}
+  .ide-card-badge{font-size:11px;padding:1px 8px;border-radius:99px;white-space:nowrap}
+  .ide-card-badge.found{background:#dafbe1;color:#1a7f37;border:1px solid #a6d8b1}
+  .ide-card-badge.nofound{background:var(--panel2);color:var(--dim);border:1px solid var(--line)}
+  .ide-card-ops{display:flex;align-items:center;gap:8px}
+  .ide-card-ops [aria-busy="true"]{pointer-events:none;opacity:.6}
+  .ide-card-owner{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;min-width:0;font-size:11px}
+  .ide-card-owner-label{color:var(--dim)}
+  .ide-card-owner .badge{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+  .ide-card-url{display:flex;align-items:center;gap:6px;min-width:0}
+  .ide-card-url input{flex:1;min-width:0;width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 8px;color:var(--fg);font:11px var(--mono)}
+  
+  .ide-card-copy{flex-shrink:0;width:32px;height:30px;padding:0}
+  .ide-card-manual-note{color:var(--dim);font-size:11px}
+
+  /* 表单 */
+  .field{margin-bottom:12px}
+  .field-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .field-row .field{flex:1;min-width:140px;margin-bottom:0}
+  .field label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
+  .field input,.field textarea,.field select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--fg);font-size:13px}
+  .field textarea{min-height:64px;font-family:var(--mono)}
+  .row2{display:flex;gap:12px}
+  .row2 .field{flex:1;min-width:0}
+  /* 编辑弹窗：分组（连接 / 模型与运行）+ 必填徽标 */
+  .m-group + .m-group{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  .m-group-title{font-size:11px;font-weight:700;color:var(--dim);letter-spacing:.6px;margin-bottom:10px}
+  .modal .mono{font-family:var(--mono);font-size:11px;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+  .field label .req{display:inline-block;margin-left:6px;font-size:10px;font-weight:600;color:var(--danger);border:1px solid var(--danger);border-radius:99px;padding:0 5px;line-height:14px;vertical-align:1px}
+  /* 弹窗内「输入框 + 粘贴按钮」行 */
+  .modal .set-inline{display:flex;gap:8px;align-items:center;min-width:0}
+  .modal .set-inline input{flex:1;min-width:0;width:auto}
+  .modal .paste-btn{padding:6px 12px;font-size:12px;white-space:nowrap;flex-shrink:0}
+
+  @media (max-width:520px){ .row2{flex-direction:column;gap:0} }
+  /* ===== 设置页：分区导航 + 设置卡片 + 常驻保存条 ===== */
+  .settings-shell{display:flex;gap:22px;align-items:flex-start;max-width:1092px;margin:0 auto;padding:1px 0 6px}
+  .settings-nav{position:sticky;top:0;flex:0 0 190px;display:flex;flex-direction:column;gap:2px;padding:2px 0 14px}
+  .settings-nav .nav-head{font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;padding:2px 10px 6px}
+  .settings-nav button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:8px;padding:7px 10px;font-size:13px;color:var(--dim);transition:.15s}
+  .settings-nav button:hover{background:var(--panel2);color:var(--fg);border-color:transparent}
+  .settings-nav button.active{background:var(--panel2);border-color:var(--line);color:var(--fg);font-weight:600}
+  .settings-main{flex:1;min-width:0;max-width:880px;display:flex;flex-direction:column;gap:14px}
+  .set-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;scroll-margin-top:10px}
+  .set-card-head{padding:14px 18px 12px;border-bottom:1px solid var(--line);background:var(--panel2);display:flex;align-items:center;gap:12px}
+  .set-card-head h3{font-size:14px;font-weight:700;letter-spacing:.2px;color:var(--fg);display:flex;align-items:center;gap:8px}
+  .set-card-head .d{font-size:12px;color:var(--dim);margin-top:3px;line-height:1.5}
+  .set-card-head .hd-text{flex:1;min-width:0}
+  .set-row{display:flex;align-items:center;gap:24px;padding:12px 18px 12px 34px;border-top:1px solid var(--line)}
+  .set-card-head + .set-row,.set-card-head + div > .set-row:first-child{border-top:none}
+  .set-row .meta{flex:1;min-width:0}
+  .set-row .meta .t{font-size:13px;font-weight:500;color:var(--fg)}
+  .set-row .meta .d{font-size:12px;color:var(--dim);margin-top:2px;line-height:1.5}
+  .set-row .ctl{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:190px;max-width:340px}
+  .set-row .ctl.grow{flex:0 1 320px;min-width:240px;max-width:none}
+  .set-row .ctl.grow.wide{flex:0 1 520px}
+  .set-row .ctl input[type=text],.set-row .ctl input[type=password],.set-row .ctl input[type=number],.set-row .ctl select{width:100%;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--fg);font-size:13px}
+  .set-row .ctl input:focus,.set-row .ctl select:focus{outline:none;border-color:var(--accent2)}
+  .numfield{position:relative;display:block;width:100%}
+  .numfield input{padding-right:40px !important}
+  .numfield .unit{position:absolute;top:50%;right:11px;transform:translateY(-50%);font-size:12px;color:var(--dim);pointer-events:none}
+  .set-note{padding:0 18px 12px 34px;font-size:11px;color:var(--dim);line-height:1.5}
+  .set-inline{display:flex;gap:8px;align-items:center;min-width:0}
+  .set-row .ctl > .set-inline{flex:1;min-width:0}
+  .set-inline input{flex:1;min-width:0}
+  .switch-field{position:relative;display:inline-flex;align-items:center;flex-shrink:0;cursor:pointer}
+  .switch-field input{position:absolute;width:1px;height:1px;opacity:0;margin:0}
+  .switch-field .switch{display:block}
+  .switch-field input:checked + .switch{background:var(--accent2)}
+  .switch-field input:checked + .switch::after{left:18px}
+  .switch-field input:focus-visible + .switch{outline:2px solid var(--accent2);outline-offset:2px}
+  .keys-editor{flex:1;min-width:0}
+  .keys-editor .ops{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
+  .settings-bar{flex-shrink:0;display:flex;align-items:center;gap:12px;width:100%;max-width:1092px;margin:10px auto 0;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+  .settings-bar .spacer{flex:1}
+  .settings-bar .state{font-size:12px;color:var(--dim)}
+  .settings-bar .state.dirty{color:var(--cool-fg);font-weight:600}
+  @media (max-width:980px){
+    .settings-shell{flex-direction:column;gap:12px}
+    .settings-nav{position:static;flex:0 0 auto;flex-direction:row;align-items:center;flex-wrap:nowrap;overflow-x:auto;width:100%;gap:6px;padding:0 0 2px}
+    .settings-nav .nav-head{display:none}
+    .settings-nav button{width:auto;flex:0 0 auto;white-space:nowrap;border-color:var(--line);padding:6px 12px}
+    .settings-main{max-width:none;width:100%}
+    .tabs{width:100%;overflow-x:auto;flex-wrap:nowrap}
+    .tab{white-space:nowrap}
+    .set-row{flex-direction:column;align-items:stretch;gap:10px;padding-left:18px}
+    .set-note{padding-left:18px}
+    .set-row .ctl,.set-row .ctl.grow{width:100%;min-width:0;max-width:none;justify-content:flex-start}
+    .set-row.toggle{flex-direction:row;align-items:center;gap:14px}
+    .set-row.toggle .ctl{width:auto;flex:0 0 auto}
+  }
+
+  /* 弹窗 */
+  .modal-mask{display:none;position:fixed;inset:0;background:#00000055;z-index:50;align-items:center;justify-content:center}
+  .modal-mask.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:560px;max-width:92vw;max-height:88vh;overflow:auto;box-shadow:0 8px 30px #00000044}
+  .modal h3{font-size:15px;margin-bottom:14px}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+
+  /* 使用说明：顶栏「?」按钮 + 说明弹窗 */
+  .tab-help{width:30px;min-width:30px;padding:0;margin-left:4px;display:inline-flex;align-items:center;
+    justify-content:center;font-size:14px;font-weight:700;border-radius:8px}
+  .help-modal{width:680px}
+  .help-body{max-height:60vh;overflow-y:auto;font-size:13px;line-height:1.75}
+  .help-body h4{font-size:13px;font-weight:700;margin:16px 0 6px;color:var(--fg)}
+  .help-body h4:first-child{margin-top:0}
+  .help-body ol,.help-body ul{margin:0;padding-left:20px}
+  .help-body li{margin:2px 0}
+  .help-body dl{margin:0}
+  .help-body dt{font-weight:600;margin-top:8px}
+  .help-body dd{margin:2px 0 0 16px;color:var(--dim)}
+  .help-body code{font-family:var(--mono);font-size:12px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:4px;padding:0 4px}
+  .help-tip{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-top:12px;
+    font-size:12px;color:var(--dim)}
+
+  .toast{position:fixed;top:16px;right:16px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent2);border-radius:8px;padding:10px 16px;font-size:13px;box-shadow:0 4px 16px #00000022;z-index:99;display:none}
+  .toast.err{border-left-color:var(--danger)}
+  .pager{display:flex;align-items:center;justify-content:space-between;margin-top:12px;font-size:12px;color:var(--dim)}
+  .sub{font-size:12px;color:var(--dim);margin-top:4px}
+  /* 模型配置页：分组折叠 + 每组一张独立卡片（与外层托盘区分开） */
+  .mg-sec{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:12px;overflow:hidden;box-shadow:0 1px 3px #0000001a}
+  .mg-sec:last-child{margin-bottom:0}
+  #models-box .mg-head{cursor:pointer;user-select:none;margin:0;padding:10px 14px;background:transparent;border-bottom:1px solid var(--line)}
+  #models-box .mg-head:not(.open){border-bottom-color:transparent}
+  .mg-head:hover .mg-name{color:var(--accent2)}
+  .mg-head:focus-visible{outline:2px solid var(--accent2);outline-offset:-2px;border-radius:6px}
+  .mg-chev{width:12px;height:12px;flex-shrink:0;opacity:.6;transition:transform .15s}
+  .mg-head.open .mg-chev{transform:rotate(90deg)}
+  /* 分组卡片内的表格不再自带外框，避免双重边框 */
+  .mg-sec .mg-body table.data-cards{border:none;border-radius:0}
+
+  @media (max-width:980px){
+    /* 窄屏：操作区整行落到卡片下方，不再挤压名称 / URL / 模型 chips */
+    #pg-suppliers .card{flex-wrap:wrap}
+    #pg-suppliers .card-ops{width:100%;justify-content:flex-end;border-top:1px solid var(--line);padding-top:10px}
+  }
+  /* 外层托盘用浅灰底：白卡片与托盘分开，而非白上白 */
+  #models-box{background:var(--panel2)}
+  .mg-btn{padding:2px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--dim);cursor:pointer;font-size:12px}
+  .mg-btn:hover{color:var(--fg);border-color:var(--dim)}
+  .btn-ico.spin{animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand"><svg class="glyph" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><defs><linearGradient id="wbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A1E4F"/><stop offset="1" stop-color="#1BA7E6"/></linearGradient></defs><rect width="16" height="16" rx="3.5" fill="url(#wbg)"/><polygon points="2.8,8 5.6,3.5 10.4,3.5 13.2,8 10.4,12.5 5.6,12.5" fill="#fff"/><polygon points="8,1.2 6.4,4.4 9.6,4.4" fill="#fff"/><polygon points="8,14.8 6.4,11.6 9.6,11.6" fill="#fff"/><line x1="2.8" y1="8" x2="1.6" y2="8" stroke="#fff" stroke-width="1"/><line x1="13.2" y1="8" x2="14.4" y2="8" stroke="#fff" stroke-width="1"/><circle cx="1.0" cy="8" r="0.7" fill="#fff"/><circle cx="15.0" cy="8" r="0.7" fill="#fff"/></svg><span>WBRelay · 多供应商自动路由</span></div>
+    <div class="stats" id="stats-bar">
+      <span>v<b id="st-ver">-</b></span>
+      <span>监听 <b id="st-port">-</b></span>
+      <span>请求 <b id="st-req">0</b></span>
+      <span>失败 <b id="st-err">0</b></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="tabs">
+      <button class="tab active" data-tab="suppliers">供应商</button>
+      <button class="tab" data-tab="models">模型配置</button>
+      <button class="tab" data-tab="usage">用量看板</button>
+      <button class="tab" data-tab="upstream" id="tab-upstream">上游服务</button>
+      <button class="tab" data-tab="settings">设置</button>
+      <button class="tab-help" id="btn-help" type="button" title="使用说明" aria-label="使用说明">?</button>
+    </div>
+  </div>
+
+  <!-- ============ 页面1 供应商 ============ -->
+  <div class="page show" id="pg-suppliers">
+    <div class="sec-title">
+      供应商
+      <span class="hint">拖拽排序 = 优先级 · 排前面的先用 · 故障自动冷却切换 · 改动即时保存生效</span>
+      <span class="spacer"></span>
+      <button class="primary" id="btn-add">＋ 添加供应商</button>
+    </div>
+    <div class="scrollbox cards-frame" id="cards-scroll"><div class="cards" id="cards"></div></div>
+  </div>
+
+  <!-- ============ 页面2 模型配置 ============ -->
+  <div class="page" id="pg-models">
+    <h2 class="ph-title">模型配置</h2>
+    <section class="set-card" id="ides-group">
+      <div class="set-card-head">
+        <div class="hd-text">
+          <h3>IDE 客户端接管</h3>
+          <div class="d">把本机网关地址与模型清单写进这些客户端，让它们直接连 WBRelay；检测到才可接管，改配置后用「重启」让它重新加载。</div>
+        </div>
+      </div>
+      <div class="ides-row">
+        <div class="ides-strip" id="ides-strip"></div>
+        <div class="ide-card">
+          <div class="ide-card-head" title="给没有内置接管的 IDE / 客户端用：把 Base URL 与 Key 填进它自己的配置即可"><span class="ide-card-name">其他 IDE</span><span class="ide-card-badge nofound">手动接入</span></div>
+          <div class="ide-card-url">
+            <input id="ide-base-url" type="text" readonly placeholder="—" aria-label="OpenAI 兼容 Base URL">
+            <button class="mini ide-card-copy" id="btn-copy-ide-base-url" type="button" data-copy="ide-base-url" title="复制 Base URL" aria-label="复制 Base URL" disabled>⧉</button>
+          </div>
+          <div class="ide-card-url">
+            <input id="ide-key-view" type="text" readonly placeholder="未设置 Key" aria-label="API Key" title="鉴权默认关闭；开启后（设置 → 安全与访问）客户端要用这个 Key">
+            <button class="mini" id="btn-gen-ide-key" type="button" title="刷新 Key：立刻换一个新的，旧的立即失效">刷新</button>
+            <button class="mini ide-card-copy" id="btn-copy-ide-key" type="button" title="复制 Key 全文" aria-label="复制 Key">⧉</button>
+          </div>
+          <div class="ide-card-url" id="ide-key-confirm" style="display:none">
+            <span class="ide-card-manual-note" style="flex:1;min-width:0">刷新后旧的立即失效</span>
+            <button class="mini danger" id="btn-key-refresh-yes" type="button">确定</button>
+            <button class="mini" id="btn-key-refresh-no" type="button">取消</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="cards-frame ph-box">
+      <div class="ph-actions">
+        <button id="btn-refresh-models" class="primary" type="button"><svg class="btn-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M9.8 6a3.8 3.8 0 1 1-1.1-2.68" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.9 1.7v2.4H7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>重新拉取</button>
+        <div class="ph-desc">
+          <span>拉取 = ①获取上游模型 ②更新模型档案库</span>
+          <span>档位优先用上游的，没有则用档案库补全</span>
+          <span>启停按模型名全局联动</span>
+          <span>倍率以上游返回为准</span>
+        </div>
+      </div>
+      <div class="ph-stats" id="models-meta"></div>
+    </section>
+    <div class="scrollbox cards-frame" id="models-box"></div>
+  </div>
+
+  <!-- ============ 页面3 用量看板 ============ -->
+  <div class="page" id="pg-usage">
+    <div class="sec-title">用量看板 <span class="hint">汇总 + 每次请求明细（请求/成功率 · Token 输入/输出/思考 · 平均耗时）</span></div>
+    <div class="usage-filters" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="seg" id="range-seg">
+        <button class="active" data-r="today">今日</button>
+        <button data-r="week">本周</button>
+        <button data-r="month">本月</button>
+        <button data-r="all">全部</button>
+        <button data-r="custom">自定义</button>
+      </div>
+      <span id="custom-range" style="display:none;align-items:center;gap:6px">
+        <input type="date" id="range-from" style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--fg);font-size:12px">
+        <span style="color:var(--dim);font-size:12px">~</span>
+        <input type="date" id="range-to" style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--fg);font-size:12px">
+        <button class="mini primary" id="btn-range-apply">应用</button>
+      </span>
+      <span style="display:inline-flex;gap:6px;align-items:center">
+        <select id="filter-supplier" style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--fg);font-size:12px">
+          <option value="">全部供应商</option>
+        </select>
+        <select id="filter-model" style="background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--fg);font-size:12px;max-width:220px">
+          <option value="">全部模型</option>
+        </select>
+        <button class="mini" id="btn-filter-reset">重置</button>
+      </span>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div class="usage-stack">
+      <section class="usage-card" id="summary-card">
+        <div class="usage-card-head">
+          <div class="seg summary-seg" id="summary-seg">
+            <button class="active" data-summary="model">按模型汇总 <em id="sum-model-count"></em></button>
+            <button data-summary="sup">按供应商汇总 <em id="sum-sup-count"></em></button>
+          </div>
+          <span class="usage-hint">汇总维度只看当前筛选范围</span>
+          <button class="mini" id="btn-summary-toggle" type="button">收起汇总</button>
+        </div>
+        <div class="summary-pane show" id="summary-pane-model"><div class="table-scroll"><table class="data-cards" id="tbl-model"><thead><tr>
+          <th>模型</th><th style="text-align:center">请求</th><th style="text-align:center">成功</th>
+          <th style="text-align:center">失败</th><th style="text-align:center">缓存</th>
+          <th style="text-align:center">输入</th><th style="text-align:center">输出</th><th style="text-align:center">思考</th>
+          <th style="text-align:center">Token 合计</th><th style="text-align:center">平均耗时</th><th style="text-align:center">速度</th><th style="text-align:center">成本</th>
+        </tr></thead><tbody></tbody></table></div></div>
+        <div class="summary-pane" id="summary-pane-sup"><div class="table-scroll"><table class="data-cards" id="tbl-sup"><thead><tr>
+          <th>供应商</th><th style="text-align:center">请求</th><th style="text-align:center">成功</th>
+          <th style="text-align:center">失败</th><th style="text-align:center">缓存</th>
+          <th style="text-align:center">输入</th><th style="text-align:center">输出</th><th style="text-align:center">思考</th>
+          <th style="text-align:center">Token 合计</th><th style="text-align:center">平均耗时</th><th style="text-align:center">速度</th><th style="text-align:center">成本</th>
+        </tr></thead><tbody></tbody></table></div></div>
+      </section>
+      <section class="usage-card" id="recent-card">
+        <div class="usage-card-head">
+          <h2>请求明细</h2><em id="recent-meta"></em><span class="spacer"></span>
+          <span style="display:inline-flex;gap:3px;align-items:center" id="recent-limits">
+            <span style="font-size:12px;color:var(--dim)">显示条数</span>
+            <button class="mini" data-limit="10">10</button>
+            <button class="mini" data-limit="20">20</button>
+            <button class="mini" data-limit="50">50</button>
+            <button class="mini" data-limit="100">100</button>
+          </span>
+        </div>
+        <div class="table-scroll" id="recent-scroll"><table class="data-cards" id="tbl-recent"><thead><tr>
+          <th style="width:150px">时间</th><th>模型</th><th>供应商</th><th style="text-align:center">模式</th>
+          <th style="text-align:center">结果</th><th style="text-align:center">首字 / 耗时</th>
+          <th style="text-align:center">速度</th><th>Tokens (入/出/思)</th><th>缓存%</th>
+          <th style="text-align:center">总 token</th><th style="text-align:center">成本</th>
+        </tr></thead><tbody></tbody></table></div>
+        <div class="pager"><span id="pg-info"></span><span id="pg-btns"></span></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============ 页面5 上游服务 ============ -->
+  <div class="page" id="pg-upstream">
+    <div class="sec-title" style="margin-top:0">
+      <span>上游服务</span>
+      <span class="hint">面板内嵌查看（同源代理，只读呈现）· 不转发、不启停</span><span class="hint" id="upstream-page-name"></span>
+      <span class="spacer"></span>
+      <span id="upstream-status" style="font-size:13px">检测中…</span>
+    </div>
+    <div class="scrollbox" id="upstream-scroll">
+      <div id="upstream-frame-wrap" style="display:none;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)">
+        <iframe id="upstream-frame" title="上游服务面板（同源代理）" loading="lazy" style="width:100%;height:78vh;min-height:480px;border:none;display:block;background:#fff"></iframe>
+      </div>
+      <div id="upstream-proxy-notice" style="display:none;border:1px dashed var(--line);border-radius:10px;padding:18px;color:var(--dim);line-height:1.7">
+        <b style="color:var(--fg)">面板内嵌查看已停用</b>
+        <div id="upstream-proxy-policy" style="margin-top:6px"></div>
+        <div id="upstream-direct-url" style="margin-top:8px;word-break:break-all"></div>
+      </div>
+      <div id="upstream-offline" style="display:none;border:1px dashed var(--line);border-radius:10px;padding:22px;text-align:center;color:var(--dim)">
+        上游服务未运行 —— WBRelay 不会启动外部程序（R6），请在它自己的窗口/服务里启动后刷新本页
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 页面4 设置 ============ -->
+  <div class="page" id="pg-settings">
+    <div class="sec-title">
+      设置
+      <span class="hint">网络与路由 · 安全兜底 · IDE 接管 · 上游服务集成 · 配置文件位置；改动后点右下角保存生效</span>
+    </div>
+    <div class="scrollbox" id="settings-scroll">
+      <div class="settings-shell">
+        <nav class="settings-nav" id="settings-nav">
+          <div class="nav-head">设置分区</div>
+          <button type="button" data-sec="sec-network">网络与路由</button>
+          <button type="button" data-sec="sec-usage">用量与统计</button>
+          <button type="button" data-sec="sec-security">安全与访问</button>
+          <button type="button" data-sec="sec-system">系统与集成</button>
+          <button type="button" data-sec="sec-upstream">上游服务</button>
+          <button type="button" data-sec="sec-paths">配置文件位置</button>
+        </nav>
+
+        <div class="settings-main" id="settings-main">
+
+          <section class="set-card" id="sec-network">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>网络与路由</h3>
+                <div class="d">网关监听端口与多供应商切换策略；端口改动需重启网关生效。</div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">监听端口</div><div class="d">网关对外监听端口，改后需重启网关生效</div></div>
+              <div class="ctl"><input id="set-port" type="number" min="1" max="65535"></div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">供应商默认超时</div><div class="d">单个供应商请求超时时间，超时后自动切下一个</div></div>
+              <div class="ctl"><span class="numfield"><input id="set-timeout" type="number" min="5"><span class="unit">秒</span></span></div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">冷却时长 · 普通失败</div><div class="d">普通错误（5xx / 连接失败）后该供应商的冷却时间</div></div>
+              <div class="ctl"><span class="numfield"><input id="set-cool" type="number" min="1"><span class="unit">秒</span></span></div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">冷却时长 · 429</div><div class="d">被限流（429）后该供应商的冷却时间，通常比普通失败短</div></div>
+              <div class="ctl"><span class="numfield"><input id="set-cool429" type="number" min="1"><span class="unit">秒</span></span></div>
+            </div>
+          </section>
+
+          <section class="set-card" id="sec-usage">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>用量与统计</h3>
+                <div class="d">用量记录的保留策略与看板刷新频率。</div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">用量记录保留天数</div><div class="d">历史请求记录保留天数，0 = 永久保留</div></div>
+              <div class="ctl"><span class="numfield"><input id="set-retention" type="number" min="0"><span class="unit">天</span></span></div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">用量看板自动刷新</div><div class="d">用量页自动刷新间隔，0 = 关闭自动刷新</div></div>
+              <div class="ctl"><span class="numfield"><input id="set-refresh" type="number" min="0" max="600"><span class="unit">秒</span></span></div>
+            </div>
+          </section>
+
+          <section class="set-card" id="sec-security">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>安全与访问</h3>
+                <div class="d">默认全关；仅在需要本机兜底校验时开启。</div>
+              </div>
+            </div>
+            <div class="set-row toggle">
+              <div class="meta"><div class="t">API Key 校验</div><div class="d">开启后 Codex 连接需带 Bearer Key；未配置 Key 时本机路由无鉴权</div></div>
+              <div class="ctl"><label class="switch-field" title="启用 API Key 校验"><input type="checkbox" id="set-auth" aria-label="API Key 校验"><span class="switch"></span></label></div>
+            </div>
+            <div class="set-row" id="keys-wrap" style="display:none">
+              <div class="keys-editor">
+                <div id="keys-box"></div>
+                <div class="ops">
+                  <button id="btn-add-key">＋ 添加 Key</button>
+                  <button class="primary" id="btn-save-keys">保存 Keys</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row toggle">
+              <div class="meta"><div class="t">管理令牌</div><div class="d">开启后修改配置需带令牌，防本机其他程序误改；默认关</div></div>
+              <div class="ctl"><label class="switch-field" title="启用管理令牌"><input type="checkbox" id="set-admin-token" aria-label="管理令牌"><span class="switch"></span></label></div>
+            </div>
+            <div class="set-row" id="admin-token-field" style="display:none">
+              <div class="meta"><div class="t">管理令牌值</div><div class="d">留空保存时自动生成；令牌自动保存在本机浏览器</div></div>
+              <div class="ctl grow">
+                <div class="set-inline">
+                  <input id="set-admin-token-value" type="text" style="font-family:var(--mono)" placeholder="留空不修改">
+                  <button id="btn-copy-admin-token" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="set-card" id="sec-system">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>系统与集成</h3>
+                <div class="d">写回 Codex 的 provider 名、网关开机自启与看板主题。</div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">Codex Provider 名称</div><div class="d">写入 config.toml 的 model_provider 名；公开发布默认 WBRelay。旧版迁移时填回你原有 config.toml 里的那个 provider 名，历史会话才能对上</div></div>
+              <div class="ctl grow"><input id="set-codex-provider" type="text" style="font-family:var(--mono)" placeholder="WBRelay"></div>
+            </div>
+            <div class="set-row toggle">
+              <div class="meta"><div class="t">开机自动启动网关</div><div class="d">登录后自动拉起 WBRelay 本身，写入注册表启动项</div></div>
+              <div class="ctl"><label class="switch-field" title="开机自动启动网关"><input type="checkbox" id="set-autostart" aria-label="开机自动启动网关"><span class="switch"></span></label></div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">界面主题</div><div class="d">看板界面主题，跟随系统时自动切换深浅色</div></div>
+              <div class="ctl"><select id="set-theme"><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></div>
+            </div>
+          </section>
+
+          <section class="set-card" id="sec-upstream">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>上游服务 <span class="badge neutral" id="upstream-port-badge"></span> <span class="hint" id="upstream-name"></span></h3>
+                <div class="d">面板由该服务自己提供；WBRelay 只做同源呈现（内嵌查看），<b>不启停、不写它的文件</b>。</div>
+              </div>
+            </div>
+            <div class="set-row toggle">
+              <div class="meta"><div class="t">启用上游服务管理</div><div class="d">关闭后隐藏顶部页签与只读状态入口</div></div>
+              <div class="ctl"><label class="switch-field" title="启用上游服务管理"><input type="checkbox" id="set-upstream-enabled" aria-label="启用上游服务管理"><span class="switch"></span></label></div>
+            </div>
+            <div class="set-note" id="upstream-off-hint" style="display:none">上游服务已关闭：顶部页签已隐藏。</div>
+            <div id="upstream-conf-wrap">
+              <div class="set-row">
+                <div class="meta"><div class="t">项目目录</div><div class="d">上游服务项目根目录的绝对路径</div></div>
+                <div class="ctl grow wide">
+                  <div class="set-inline">
+                    <input id="set-upstream-dir" type="text" placeholder="绝对路径">
+                    <button id="btn-save-upstream-dir" style="white-space:nowrap">保存</button>
+                  </div>
+                </div>
+              </div>
+              <div class="set-note" id="upstream-dir-hint"></div>
+              <div class="set-row toggle">
+                <div class="meta"><div class="t">自动登录面板</div><div class="d">iframe 加载后自动填入口令并提交；口令只存在本浏览器，不落盘</div></div>
+                <div class="ctl"><label class="switch-field" title="自动登录面板"><input type="checkbox" id="set-upstream-autologin" aria-label="自动登录面板"><span class="switch"></span></label></div>
+              </div>
+              <div class="set-row">
+                <div class="meta"><div class="t">面板密码</div><div class="d">上游服务面板密码；只写入本浏览器，WBRelay 不保存</div></div>
+                <div class="ctl grow">
+                  <div class="set-inline">
+                    <input id="set-upstream-password" type="password" placeholder="未设置时请手动登录">
+                    <button id="btn-save-upstream-conf" style="white-space:nowrap">保存</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="set-card" id="sec-paths">
+            <div class="set-card-head">
+              <div class="hd-text">
+                <h3>配置文件位置</h3>
+                <div class="d">网关自身配置与数据文件的实际存放位置（只读展示，可一键复制路径）。</div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">数据目录 <span class="badge neutral" id="path-data-dir-badge"></span></div><div class="d">本项目全部运行时数据的根目录，默认 %APPDATA%\WBRelay</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-data-dir" type="text" readonly placeholder="—">
+                  <button data-copy="path-data-dir" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">配置文件 <span class="badge neutral" id="path-settings-badge"></span></div><div class="d">settings.json —— 供应商、路由、鉴权等全部设置（原子写入）</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-settings" type="text" readonly placeholder="—">
+                  <button data-copy="path-settings" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">用量记录 <span class="badge neutral" id="path-usage-badge"></span></div><div class="d">usage.jsonl —— 每次请求的明细与 Token 用量</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-usage" type="text" readonly placeholder="—">
+                  <button data-copy="path-usage" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">模型档案库 <span class="badge neutral" id="path-profiles-badge"></span></div><div class="d">model_profiles.json —— 模型档位与倍率档案</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-profiles" type="text" readonly placeholder="—">
+                  <button data-copy="path-profiles" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">模型缓存 <span class="badge neutral" id="path-models-cache-badge"></span></div><div class="d">models_cache.json —— 上游拉取到的模型清单缓存</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-models-cache" type="text" readonly placeholder="—">
+                  <button data-copy="path-models-cache" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">运行日志 <span class="badge neutral" id="path-log-badge"></span></div><div class="d">wb.log —— 网关运行日志（只记录事件，不含 Key 明文）</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-log" type="text" readonly placeholder="—">
+                  <button data-copy="path-log" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">IDE 备份 <span class="badge neutral" id="path-ide-backups-badge"></span></div><div class="d">ide_backups\ —— 接管 IDE 前的原始配置备份</div></div>
+              <div class="ctl grow wide">
+                <div class="set-inline">
+                  <input id="path-ide-backups" type="text" readonly placeholder="—">
+                  <button data-copy="path-ide-backups" style="white-space:nowrap">复制</button>
+                </div>
+              </div>
+            </div>
+            <div class="set-note" id="paths-note">以上路径由网关进程实测返回；显示「未生成」的文件会在首次写入时自动创建。</div>
+          </section>
+
+        </div>
+      </div>
+    </div>
+    <div class="settings-bar">
+      <span class="state" id="settings-state">改动仅在保存后生效</span>
+      <span class="spacer"></span>
+      <button class="primary" id="btn-save-settings">保存全部设置</button>
+    </div>
+  </div>
+
+<!-- 供应商编辑弹窗 -->
+<div class="modal-mask" id="edit-mask">
+  <div class="modal">
+    <h3 id="edit-title">编辑供应商</h3>
+    <input type="hidden" id="f-id">
+    <div class="m-group">
+      <div class="m-group-title">连接</div>
+      <div class="field"><label>名称</label>
+        <div class="set-inline"><input id="f-name" placeholder="如：本地中转 / 官网直连"><button type="button" class="paste-btn" data-paste="f-name" title="从剪贴板粘贴到本框">粘贴</button></div>
+      </div>
+      <div class="field"><label>接口地址 Base URL<span class="req">必填</span></label>
+        <div class="set-inline"><input id="f-base" placeholder="https://api.example.com/v1"><button type="button" class="paste-btn" data-paste="f-base" title="从剪贴板粘贴到本框">粘贴</button></div>
+      </div>
+      <div class="field"><label>API Key</label>
+        <div class="set-inline"><input id="f-key" placeholder="输入新 Key 覆盖；不填保持原 Key"><button type="button" class="paste-btn" data-paste="f-key" title="从剪贴板粘贴到本框">粘贴</button></div>
+        <div class="sub">回显为掩码；原样不动 = 保持原 Key，填入新值即替换；新增供应商必填。</div>
+      </div>
+      <div class="field"><label>接口协议</label>
+        <select id="f-wire"><option value="responses">responses（Codex 直连，推荐）</option><option value="chat">chat/completions（OpenAI 兼容）</option></select>
+        <div class="sub">Codex 走 responses；仅当上游不支持 responses 时才选 chat/completions。</div>
+      </div>
+    </div>
+    <div class="m-group">
+      <div class="m-group-title">模型与运行</div>
+      <div class="field"><label>模型清单</label><textarea id="f-models" placeholder="留空默认全部，或填：gpt-*&#10;deepseek-*&#10;glm-*"></textarea><div class="sub">每行一个；支持 <span class="mono">gpt-*</span> 通配；留空 = 该供应商拉取到的模型全部接管。</div></div>
+      <div class="row2">
+        <div class="field"><label>超时（秒）</label><input id="f-timeout" type="number" value="120" min="5"></div>
+        <div class="field"><label>启用</label><select id="f-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="btn-cancel">取消</button>
+      <button class="primary" id="btn-ok">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 使用说明弹窗（顶栏 ? 打开） -->
+<div class="modal-mask" id="help-mask">
+  <div class="modal help-modal">
+    <h3>使用说明</h3>
+    <div class="sub" style="margin:-8px 0 12px">WBRelay · 多供应商自动路由网关</div>
+    <div class="help-body">
+      <h4>一、三步上手</h4>
+      <ol>
+        <li><b>供应商</b>：点右上「＋ 添加供应商」，填名称、接口地址（Base URL）、API Key → 保存即生效。</li>
+        <li><b>模型配置</b>：点「重新拉取」拿到各上游的模型清单与倍率，再按需要逐模型启停（档位优先用上游返回，缺失由模型档案库补全）。</li>
+        <li><b>接客户端</b>：内置四款（Codex / OpenCode / DSH / Crush）在「IDE 客户端接管」里点开关一键写入；<b>其它客户端</b>用同一行的「其他 IDE」卡片 —— 把它给的 Base URL 与 Key 填进客户端自己的配置即可。</li>
+      </ol>
+
+      <h4>二、五个页签各管什么</h4>
+      <dl>
+        <dt>供应商</dt><dd>上游清单与优先级（拖拽排序 = 排前面的先用）；启停开关、测速、编辑、复制、删除。</dd>
+        <dt>模型配置</dt><dd>拉取模型、按分组启停（组内「全启用／全停用」）；页头的「IDE 客户端接管」卡片组与「其他 IDE」卡片也在这里。</dd>
+        <dt>用量看板</dt><dd>请求次数与成功率、Token 用量、平均耗时；按模型／供应商汇总与明细筛选。</dd>
+        <dt>上游服务</dt><dd>把外部上游的<b>面板原样嵌进来看</b>（同源代理，只做呈现）：服务状态、端口、内嵌页面与它的自动登录。网关自身不启停、不自启、不守护外部程序；在面板里的操作由那个面板自己执行。</dd>
+        <dt>设置</dt><dd>网络与路由、用量与统计、安全与访问、系统与集成、上游服务、配置文件位置。</dd>
+      </dl>
+
+      <h4>三、路由规则（核心语义，不会变）</h4>
+      <ul>
+        <li>按列表顺序尝试：<b>已启用 + 未冷却 + 模型命中</b> 的供应商优先用。</li>
+        <li>请求失败即<b>自动冷却并切下一个</b>；冷却中的供应商会被跳过。</li>
+        <li>全部失败才报错：返回最后一个错误，用量里记 <code>realm=supplier:all_failed</code>。</li>
+        <li>保存供应商／设置会<b>清空冷却表</b>，立即恢复尝试。</li>
+      </ul>
+
+      <h4>四、常见操作</h4>
+      <ul>
+        <li><b>拖拽卡片</b>调整优先级。</li>
+        <li><b>测速</b>：请求上游 <code>/models</code> 计时，结果显示在按钮右侧（未测 → 测速中… → 123 ms／失败）。</li>
+        <li><b>编辑供应商</b>：API Key 回显为掩码，<b>原样不动 = 保持原 Key</b>，填新值即替换；名称／地址／Key 后都有「粘贴」按钮（走本机网关读剪贴板，不弹浏览器授权）。</li>
+        <li><b>模型启停</b>：模型配置页每个分组内单独开关，分组头会显示该组「已启用 n/N」。</li>
+        <li><b>IDE 接管</b>：每张卡有「归属」一行，实时告诉你<b>现在是谁在接管</b> —— <code>WBRelay 接管中</code> / <code>WBRelay 残留（端口不一致）</code> / <code>其他工具或手工接管</code> / <code>未接管</code>（每 5 秒自动刷新，被外部改过还会标「配置已被外部改写」）。开关打开＝备份并写入，关闭＝还原；改完点「↻ 重启」让客户端重新加载。</li>
+        <li><b>给没内置的客户端</b>：用「其他 IDE」卡片。地址点 <code>⧉</code> 复制；Key 平时打码，<b>点进输入框可看真值并直接框选复制</b>；「刷新」换一把新的（会二次确认，成功后自动复制到剪贴板）。</li>
+        <li><b>重启网关</b>：<code>python tools/restart-gateway.py</code>（值守进程执行，2–5 秒恢复，期间 Codex 会话会短暂中断）。</li>
+      </ul>
+
+      <h4>五、文件与排错</h4>
+      <ul>
+        <li>数据目录 <code>%APPDATA%\WBRelay</code>：设置页「配置文件位置」有全部路径与一键复制。</li>
+        <li>日志 <code>wb.log</code>；用量 <code>usage.jsonl</code>；模型档案 <code>model_profiles.json</code>；窗口大小 <code>window.json</code>。</li>
+        <li>端口默认 <code>8789</code>；被占用会自动顺延（也可用 <code>--port</code> 指定）。把地址贴进浏览器时 <code>http://127.0.0.1:8789/v1</code> 会直接列出<b>当前可用的模型</b>。</li>
+        <li><b>客户端拉不到模型</b>：地址要填到 <code>/v1</code>；模型名照抄清单里的名字（大小写敏感）；没启用的模型会返回 503。</li>
+        <li><b>协议范围</b>：只讲 OpenAI 协议 —— <code>/v1/chat/completions</code>（多数客户端）与 <code>/v1/responses</code>（Codex）。不提供 Anthropic 的 <code>/v1/messages</code>，也没有向量／图片／语音接口。</li>
+        <li>Codex 起不来：多半是模型清单（catalog）缺字段 —— 在模型配置页重新拉取一次即可重建。</li>
+      </ul>
+
+      <div class="help-tip">网关只监听 <code>127.0.0.1</code>，默认不做鉴权（Key 填什么都能连）；要真校验就在设置页打开「API Key 校验」。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="btn-help-close">知道了</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ---------- 基础 ---------- */
+function el(id){ return document.getElementById(id); }
+/* 兜底：输入框/文本域右键菜单始终允许（防个别容器拦截导致无法右键粘贴 Key） */
+document.addEventListener("contextmenu", function(e){
+  var t = e.target;
+  if(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;   // 不阻止默认（原生粘贴菜单）
+});
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+function api(path, opts){
+  opts = opts || {};
+  var headers = opts.headers || {};
+  if(opts.body !== undefined){ headers["Content-Type"] = "application/json"; }
+  var adm = localStorage.getItem("wb_admin_token");
+  if(adm) headers["X-Admin-Token"] = adm;
+  return fetch(path, {method: opts.method || "GET", headers: headers,
+                      body: opts.body === undefined ? undefined : JSON.stringify(opts.body)})
+    .then(function(r){
+      if(r.status === 401 && path.indexOf("/api/") === 0 && !window.__adminTokWarn){
+        window.__adminTokWarn = true;
+        toast("管理令牌校验失败：请在设置页粘贴令牌（忘记可查看 %APPDATA%\\WBRelay\\settings.json 的 admin_token）", true);
+        setTimeout(function(){ window.__adminTokWarn = false; }, 4000);
+      }
+      if(opts.rawText){
+        return r.text().then(function(text){
+          var j = {};
+          try { j = JSON.parse(text); } catch(e){}
+          return {status:r.status, json:j, text:text};
+        });
+      }
+      return r.json().catch(function(){ return {}; }).then(function(j){ return {status:r.status, json:j}; });
+    });
+}
+var toastTimer = null;
+function toast(msg, isErr){
+  var t = el("toast");
+  t.textContent = msg;
+  t.className = "toast" + (isErr ? " err" : "");
+  t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.style.display = "none"; }, 2600);
+}
+function _tokenColor(v){
+  // 梦幻西游金币颜色规则（深色版适配）
+  if(v >= 1000000000) return "#f1c40f";  // 10亿+ 金
+  if(v >= 100000000) return "#ff6b9d";   // 1亿+ 粉
+  if(v >= 10000000) return "#9b59b6";    // 1000万+ 紫
+  if(v >= 1000000) return "#e74c3c";     // 100万+ 红
+  if(v >= 100000) return "#2ecc71";       // 10万+ 绿
+  if(v >= 10000) return "#64c8ff";        // 1万+ 蓝
+  return "";                               // 默认色
+}
+function fmtK(v){
+  if(!v && v !== 0) return "-";
+  var c = _tokenColor(v);
+  var s = v >= 100000000 ? (v/100000000).toFixed(2)+"亿" : String(v);
+  return c ? '<span style="color:'+c+';font-weight:600">'+s+'</span>' : s;
+}
+function fmtKM(v){
+  if(!v && v !== 0) return "-";
+  // 上下文窗口 / 最大输出用 K/M 缩写
+  if(v >= 1000000) return (v/1000000).toFixed(v % 1000000 === 0 ? 0 : 1) + "M";
+  if(v >= 1000) return (v/1000).toFixed(v % 1000 === 0 ? 0 : 1) + "K";
+  return String(v);
+}
+function fmtW(v){
+  if(!v && v !== 0) return "-";
+  var c = _tokenColor(v);
+  var s;
+  if(v >= 100000000) s = (v/100000000).toFixed(v % 100000000 === 0 ? 0 : 2) + "亿";
+  else if(v >= 10000) s = (v/10000).toFixed(v % 10000 === 0 ? 0 : 1) + "万";
+  else s = String(v);
+  return c ? '<span style="color:'+c+'">'+s+'</span>' : s;
+}
+function fmtCost(v){
+  if(v == null || isNaN(v) || v <= 0) return "-";
+  return "$" + (v < 0.01 ? v.toFixed(4) : v.toFixed(2));
+}
+function fmtDur(ms){
+  if(!ms) return "-";
+  if(ms < 1000) return ms + " ms";
+  return (ms/1000).toFixed(1) + " s";
+}
+function themeApply(t){
+  if(t === "dark") document.documentElement.setAttribute("data-theme","dark");
+  else if(t === "light") document.documentElement.setAttribute("data-theme","light");
+  else document.documentElement.removeAttribute("data-theme");
+}
+var THEME = localStorage.getItem("wb_theme") || "system";
+themeApply(THEME);
+
+/* ---------- Tab ---------- */
+document.querySelectorAll(".tab").forEach(function(b){
+  b.addEventListener("click", function(){
+    document.querySelectorAll(".tab").forEach(function(x){ x.classList.remove("active"); });
+    b.classList.add("active");
+    document.querySelectorAll(".page").forEach(function(p){ p.classList.remove("show"); });
+    el("pg-" + b.dataset.tab).classList.add("show");
+    if(b.dataset.tab === "models") loadModels();
+    if(b.dataset.tab === "usage"){ loadModelPrices(); loadUsage(); startUsageAutoRefresh(); } else stopUsageAutoRefresh();
+    if(b.dataset.tab === "upstream") loadUpstream();
+    if(b.dataset.tab === "settings") loadSettings();
+    if(b.dataset.tab === "models" || b.dataset.tab === "settings") startIdesAutoRefresh(); else stopIdesAutoRefresh();
+  });
+});
+
+/* ---------- 供应商页 ---------- */
+var SUPPLIERS = [];
+var _prevSupSig = "";   // 上次保存的供应商结构签名（id|base_url），用于判断是否需要刷新模型缓存
+function supSig(sups){
+  return JSON.stringify((sups||[]).map(function(s){ return s.id + "|" + s.base_url; }));
+}
+function loadState(){
+  return api("/api/state").then(function(res){
+    if(res.status !== 200) return;
+    SUPPLIERS = res.json.suppliers || [];
+    _prevSupSig = supSig(SUPPLIERS);
+    renderCards();
+    renderStats(res.json);
+  });
+}
+function renderStats(s){
+  el("st-ver").textContent = s.version || "-";
+  el("st-port").textContent = s.port;
+  el("st-req").textContent = (s.stats||{}).requests || 0;
+  el("st-err").textContent = (s.stats||{}).errors || 0;
+  renderIdeBaseUrl(s.port);
+  /* /api/state 每次都带 api_keys：顺手同步卡片上的 Key（不必等设置页加载） */
+  if(typeof KEYS !== "undefined"){ KEYS = s.api_keys || []; renderIdeKey(); }
+}
+function healthBadge(h){
+  if(!h) return "";
+  if(h.cooling) return '<span class="badge cool">冷却中</span>';
+  if(!h.requests) return '<span class="badge neutral" title="暂无请求记录">无请求</span>';
+  var cls = h.rate >= 80 ? "on" : (h.rate >= 50 ? "warn" : "off");
+  var txt = h.rate >= 80 ? "健康" : (h.rate >= 50 ? "一般" : "异常");
+  return '<span class="badge '+cls+'" title="最近 '+h.requests+' 次请求，失败 '+h.fail+' 次，成功率 '+h.rate+'%">'+txt+' '+h.rate+'%</span>';
+}
+function renderCards(){
+  var box = el("cards");
+  box.innerHTML = "";
+  SUPPLIERS.forEach(function(s, i){
+    var card = document.createElement("div");
+    card.className = "card" + (s.enabled ? "" : " disabled");
+    card.draggable = true;
+    card.dataset.idx = i;
+    var badge = s.cooling ? '<span class="badge cool">冷却中</span>'
+                : (s.enabled ? '<span class="badge on">已启用</span>' : '<span class="badge off">已停用</span>');
+    var chips = (s.models||[]).map(function(m){ return '<span class="chip">'+esc(m)+'</span>'; }).join("");
+    card.innerHTML =
+      '<span class="drag" title="按住拖动调整优先级">⠿</span>' +
+      '<div class="card-main">' +
+        '<div class="card-top"><span class="card-name">'+esc(s.name)+'</span>'+badge+healthBadge(s.health)+'</div>' +
+        '<div class="card-sub"><span class="url">'+esc(s.base_url)+'</span><span>'+esc(s.wire_api)+'</span><span>#'+(i+1)+' 优先级</span><span>超时 '+s.timeout_sec+'s</span></div>' +
+        (chips ? '<div class="chips">'+chips+'</div>' : '') +
+      '</div>' +
+      '<div class="card-ops">' +
+        '<div class="ops-status">' +
+          '<div class="switch'+(s.enabled?' on':'')+'" role="switch" aria-checked="'+(s.enabled?'true':'false')+'"'
+            + ' data-toggle="'+i+'" title="启用 / 停用该供应商"></div>' +
+          '<span class="ops-sep"></span>' +
+          '<button data-ping="'+i+'" title="测速：请求上游 /models 计时">测速</button>' +
+          '<span class="ping-out" id="ping-'+i+'">未测</span>' +
+        '</div>' +
+        '<div class="ops-actions">' +
+          '<button data-edit="'+i+'">编辑</button>' +
+          '<button data-clone="'+i+'" title="复制一个相同配置的供应商">复制</button>' +
+          '<span class="ops-sep"></span>' +
+          '<button class="danger" data-del="'+i+'" title="删除该供应商">删除</button>' +
+        '</div>' +
+      '</div>';
+    box.appendChild(card);
+  });
+  bindCards();
+}
+function bindCards(){
+  var box = el("cards");
+  // ---- 整卡拖拽（抓起跟手 + 实时重排，无动画；视觉位置恒定，重排后反推修正 transform）----
+  var dragEl = null, dragStartY = 0, dragStartTop = 0, dragMoved = false, lastTarget = -1;
+  function isInteract(t){
+    return !!(t && (t.closest(".card-ops") || t.closest(".switch") || t.closest("button")));
+  }
+  function reorderTo(y){
+    var dy = y - dragStartY;
+    var visTop = dragStartTop + dy;                       // 目标视觉 top（由鼠标决定）
+    var h = dragEl.getBoundingClientRect().height;
+    var visMid = visTop + h / 2;
+    // 以当前文档流位置为基准，设置 transform 使视觉 top 恒等于 visTop（跟随鼠标）
+    dragEl.style.transform = "none";
+    var flowTop = dragEl.getBoundingClientRect().top;
+    dragEl.style.transform = "translateY(" + (visTop - flowTop) + "px)";
+    if(!dragMoved && Math.abs(dy) < 6) return;
+    dragMoved = true;
+    // 找落点（dragEl 中心压过哪张卡）
+    var cs = Array.from(box.querySelectorAll(".card"));
+    var myPos = cs.indexOf(dragEl);
+    var target = -1;
+    for(var i=0;i<cs.length;i++){
+      if(i === myPos) continue;
+      var rr = cs[i].getBoundingClientRect();
+      if(visMid > rr.top && visMid < rr.bottom){ target = i; break; }
+    }
+    if(target < 0 || target === lastTarget) return;
+    lastTarget = target;
+    // 重排 DOM，随后立刻以新文档流位置重新修正 transform，保持视觉跟随鼠标
+    if(myPos < target) box.insertBefore(dragEl, cs[target].nextSibling);
+    else box.insertBefore(dragEl, cs[target]);
+    dragEl.style.transform = "none";
+    var flowTop2 = dragEl.getBoundingClientRect().top;
+    dragEl.style.transform = "translateY(" + (visTop - flowTop2) + "px)";
+  }
+  function onMove(e){
+    if(!dragEl) return;
+    reorderTo(e.clientY != null ? e.clientY : (e.touches ? e.touches[0].clientY : 0));
+  }
+  function onUp(){
+    if(!dragEl) return;
+    dragEl.style.transform = "";
+    dragEl.classList.remove("dragging");
+    if(dragMoved){
+      var order = [];
+      Array.from(box.querySelectorAll(".card")).forEach(function(c){ order.push(parseInt(c.dataset.idx)); });
+      SUPPLIERS = order.map(function(i){ return SUPPLIERS[i]; });
+      saveSuppliers("优先级已保存");
+    }
+    dragEl = null; dragMoved = false; lastTarget = -1;
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+  }
+  Array.from(box.querySelectorAll(".card")).forEach(function(c){
+    c.addEventListener("pointerdown", function(e){
+      if(e.button !== 0 && e.pointerType === "mouse") return;
+      if(isInteract(e.target)) return;
+      e.preventDefault();
+      dragEl = c; dragMoved = false; lastTarget = -1;
+      dragStartY = e.clientY != null ? e.clientY : (e.touches ? e.touches[0].clientY : 0);
+      dragStartTop = c.getBoundingClientRect().top;
+      c.classList.add("dragging");
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+    });
+    c.addEventListener("dragstart", function(e){ e.preventDefault(); });   // 禁用原生 HTML5 拖拽
+  });
+  document.querySelectorAll("#cards .switch").forEach(function(sw){
+    sw.addEventListener("click", function(){
+      var i = parseInt(sw.dataset.toggle);
+      SUPPLIERS[i].enabled = !SUPPLIERS[i].enabled;
+      renderCards();
+      saveSuppliers("供应商状态已更新");
+    });
+  });
+  document.querySelectorAll("#cards [data-edit]").forEach(function(b){
+    b.addEventListener("click", function(){ openEdit(parseInt(b.dataset.edit)); });
+  });
+  document.querySelectorAll("#cards [data-ping]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var i = parseInt(b.dataset.ping);
+      var out = el("ping-" + i);
+      out.className = "ping-out";      // 固定槽位：结果长短不会顶动后面的按钮
+      out.title = "";
+      out.textContent = "测速中…";
+      api("/api/suppliers/ping", {method:"POST", body:{id: SUPPLIERS[i].id}}).then(function(res){
+        if(res.status === 200 && res.json.ok){
+          out.textContent = res.json.ms + " ms";
+          out.className = "ping-out ok";
+        } else {
+          out.textContent = "失败";
+          out.className = "ping-out err";
+          out.title = (res.status === 200 && res.json.status) ? ("HTTP " + res.json.status) : "请求失败";
+        }
+      });
+    });
+  });
+  document.querySelectorAll("#cards [data-clone]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var i = parseInt(b.dataset.clone);
+      api("/api/suppliers/clone", {method:"POST", body:{id: SUPPLIERS[i].id}}).then(function(res){
+        if(res.status === 200){ toast("已复制：" + (res.json.name||"") + "（可点编辑改名）"); loadState(); }
+        else toast((res.json.error||{}).message || "复制失败", true);
+      });
+    });
+  });
+  document.querySelectorAll("#cards [data-del]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var i = parseInt(b.dataset.del);
+      var s = SUPPLIERS[i];
+      if(!s) return;
+      if(!confirm("确认删除供应商「" + s.name + "」？删除后不可恢复。")) return;
+      SUPPLIERS.splice(i, 1);
+      renderCards();
+      saveSuppliers("供应商已删除");
+    });
+  });
+}
+function saveSuppliers(msg){
+  var oldSig = _prevSupSig;
+  var newSig = supSig(SUPPLIERS);
+  api("/api/suppliers", {method:"POST", body:{suppliers: SUPPLIERS}}).then(function(res){
+    if(res.status === 200){
+      toast(msg || "已保存生效");
+      // 供应商结构变化（新增/删除/复制/改 URL）→ 静默刷新模型缓存，模型页自动出现新供应商模型
+      if(oldSig !== newSig) refreshModels();
+      loadState();
+    }
+    else toast((res.json.error||{}).message || "保存失败", true);
+  });
+}
+function refreshModels(){
+  api("/api/models?refresh=1").then(function(res){
+    if(res.status === 200) loadModels();
+  });
+}
+function openEdit(i){
+  var s = SUPPLIERS[i];
+  el("edit-title").textContent = "编辑供应商";
+  el("f-id").value = s.id;
+  el("f-name").value = s.name;
+  el("f-base").value = s.base_url;
+  el("f-key").value = s.masked || "";
+  el("f-key").placeholder = s.masked ? ("输入新 Key 覆盖 " + s.masked) : "新供应商必填";
+  el("f-wire").value = s.wire_api;
+  el("f-models").value = (s.models||[]).join("\n");
+  el("f-timeout").value = s.timeout_sec;
+  el("f-enabled").value = s.enabled ? "1" : "0";
+  el("edit-mask").classList.add("show");
+}
+function openAdd(){
+  el("edit-title").textContent = "添加供应商";
+  el("f-id").value = "";
+  el("f-name").value = ""; el("f-base").value = ""; el("f-key").value = "";
+  el("f-wire").value = "responses"; el("f-models").value = "";
+  el("f-timeout").value = "120"; el("f-enabled").value = "1";
+  el("edit-mask").classList.add("show");
+}
+function collectForm(){
+  return {
+    id: el("f-id").value, name: el("f-name").value.trim(),
+    base_url: el("f-base").value.trim(), api_key: el("f-key").value.trim(),
+    wire_api: el("f-wire").value,
+    models: el("f-models").value.split("\n").map(function(x){return x.trim();}).filter(Boolean),
+    timeout_sec: parseInt(el("f-timeout").value) || 120,
+    enabled: el("f-enabled").value === "1"
+  };
+}
+el("btn-add").addEventListener("click", openAdd);
+el("btn-ok").addEventListener("click", function(){
+  var f = collectForm();
+  if(!f.base_url){ toast("Base URL 必填", true); return; }
+  if(el("f-id").value){
+    var i = SUPPLIERS.findIndex(function(s){ return s.id === el("f-id").value; });
+    if(i >= 0){ var old = SUPPLIERS[i]; SUPPLIERS[i] = Object.assign({}, old, f, {api_key: f.api_key || old.api_key}); }
+  } else { SUPPLIERS.push(f); }
+  el("edit-mask").classList.remove("show");
+  renderCards();
+  saveSuppliers("供应商已保存");
+});
+el("btn-cancel").addEventListener("click", function(){ el("edit-mask").classList.remove("show"); });
+/* 使用说明：顶栏 ? 打开，点遮罩 / 按 Esc 关闭 */
+el("btn-help").addEventListener("click", function(){ el("help-mask").classList.add("show"); });
+el("btn-help-close").addEventListener("click", function(){ el("help-mask").classList.remove("show"); });
+el("help-mask").addEventListener("click", function(e){ if(e.target === this) this.classList.remove("show"); });
+document.addEventListener("keydown", function(e){
+  if(e.key === "Escape") el("help-mask").classList.remove("show");
+});
+/* 粘贴按钮：127.0.0.1 / localhost 属安全上下文，可直接读剪贴板；
+   未授权或不支持时回退为「聚焦全选 + 提示 Ctrl+V」，不会静默失败 */
+document.addEventListener("click", function(e){
+  var btn = e.target && e.target.closest ? e.target.closest("[data-paste]") : null;
+  if(!btn) return;
+  var inp = el(btn.dataset.paste);
+  if(!inp) return;
+  function fallback(msg){
+    inp.focus();
+    try { inp.select(); } catch(err){}
+    toast(msg, true);
+  }
+  function apply(txt){
+    txt = (txt || "").trim();
+    if(!txt){ toast("剪贴板为空", true); inp.focus(); return; }
+    inp.value = txt;
+    inp.dispatchEvent(new Event("input", {bubbles:true}));
+    inp.focus();
+    toast("已粘贴到本框（保存后生效）");
+  }
+  function viaBrowserClipboard(){
+    if(navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(apply).catch(function(){
+        fallback("未获得剪贴板权限，请按 Ctrl+V 粘贴");
+      });
+    } else {
+      fallback("当前环境不支持自动粘贴，请按 Ctrl+V");
+    }
+  }
+  // 优先走本机网关（同一台机器，无需浏览器剪贴板权限）；
+  // 网关旧版本没这个接口（404）或非 Windows 时再回退到浏览器 API
+  api("/api/clipboard").then(function(res){
+    if(res.status === 200 && res.json && res.json.supported){ apply(res.json.text); return; }
+    viaBrowserClipboard();
+  }).catch(function(){ viaBrowserClipboard(); });
+});
+
+/* ---------- IDE 客户端卡片组 ---------- */
+var _idesTimer = null;
+var _idesRequest = null;
+var _idesPayload = null;
+var _idesBusy = 0;
+var _idesGeneration = 0;
+/* 刚生成的 Key 明文：只活在本页内存里（刷新页面即消失），用于「生成后马上复制」 */
+function idesTabActive(){
+  var act = document.querySelector(".tab.active");
+  return !!(act && (act.dataset.tab === "models" || act.dataset.tab === "settings"));
+}
+function startIdesAutoRefresh(){
+  stopIdesAutoRefresh();
+  if(!idesTabActive()) return;
+  if(!document.hidden) loadIdes();
+  _idesTimer = setInterval(function(){
+    if(!document.hidden && idesTabActive()) loadIdes();
+  }, 5000);
+}
+function stopIdesAutoRefresh(){
+  if(_idesTimer !== null){ clearInterval(_idesTimer); _idesTimer = null; }
+}
+function renderIdeBaseUrl(port){
+  var input = el("ide-base-url"), btn = el("btn-copy-ide-base-url");
+  var value = String(port == null ? "" : port);
+  var valid = /^\d+$/.test(value) && Number(value) > 0 && Number(value) <= 65535;
+  var url = valid ? "http://127.0.0.1:" + Number(value) + "/v1" : "";
+  if(input){ input.value = url; input.title = url; }
+  if(btn) btn.disabled = !url;
+}
+/* 卡片上的 Key（只操作 api_keys[0]）：生成 / 删除 / 复制。
+   明文不进 DOM —— 点「复制」时才向后端取一次，直接进剪贴板；
+   刚生成的 Key 例外（那时它本来就在本页内存里，明文显示一次便于立即复制）。 */
+function ideKeyFirst(){
+  return (typeof KEYS !== "undefined" && KEYS && KEYS.length) ? KEYS[0] : null;
+}
+function ideKeyCount(){
+  return (typeof KEYS !== "undefined" && KEYS) ? KEYS.length : 0;
+}
+function ideKeyList(keep){
+  return (typeof KEYS !== "undefined" && KEYS) ? (keep ? KEYS.slice(0) : KEYS.slice(1)) : [];
+}
+function ideShowKeyConfirm(show){
+  /* 卡片内自带确认（不依赖 window.confirm —— 原生窗口里系统弹窗未必可用） */
+  var row = el("ide-key-confirm");
+  if(row) row.style.display = show ? "" : "none";
+  var btn = el("btn-gen-ide-key");
+  if(btn) btn.disabled = !!show;
+}
+function ideRefreshKey(){
+  var rest = ideKeyList(true);
+  var fresh = ideNewKey();
+  ideSaveKeys(ideKeyPayload(rest.slice(1), fresh), "Key 已刷新（请马上复制）", fresh);
+}
+function ideNewKey(){
+  /* `wb-` + 11 位随机（a-z0-9）= 14 字符，与项目默认 Key `wb-relay-key-1`
+     同长度同前缀（见 wbrelay/ides/base.py:_wb_api_key 的兜底值）；
+     中间随机部分靠 `_mask_key()` 打码显示（前 4 + ****** + 后 4）。 */
+  var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  var out = "", i, bytes = null;
+  var c = (typeof crypto !== "undefined") ? crypto : null;
+  if(c && c.getRandomValues){ bytes = new Uint8Array(11); c.getRandomValues(bytes); }
+  for(i=0;i<11;i++){
+    var v = bytes ? bytes[i] : Math.floor(Math.random() * 256);
+    out += alphabet.charAt(v % alphabet.length);
+  }
+  return "wb-" + out;
+}
+function ideKeyPayload(kept, extra){
+  var out = [];
+  (kept || []).forEach(function(k){ out.push({id:k.id, name:k.name, key:"", enabled:true}); });
+  if(extra){ out.push({id:"", name:"手动接入", key:extra, enabled:true}); }
+  return out;
+}
+function renderIdeKey(){
+  var input = el("ide-key-view");
+  if(!input) return;
+  var first = ideKeyFirst();
+  /* 正在框选/查看时不要打断（聚焦会临时显示真值，见下面的 focus 处理） */
+  if(document.activeElement === input) return;
+  /* 静止时只显示打码值 */
+  input.value = first ? (first.masked || "******") : "";
+  input.placeholder = first ? "" : "未设置 Key";
+  var n = ideKeyCount();
+  var more = (n > 1) ? ("；另有 " + (n - 1) + " 个 Key，见设置页") : "";
+  input.title = (first ? "已设置" : "未设置") + more + "；鉴权默认关闭，开启后客户端要用这个 Key";
+}
+function ideSaveKeys(list, okMsg, newPlain){
+  api("/api/keys", {method:"POST", body:{api_keys:list}}).then(function(res){
+    if(res.status !== 200){ toast((res.json.error||{}).message || "保存失败", true); return; }
+    if(newPlain){ copyText(newPlain, "Key 已刷新，已复制到剪贴板"); }   /* 明文只进剪贴板，不上屏 */
+    else { toast(okMsg); }
+    loadSettings();
+  });
+}
+if(el("btn-gen-ide-key")) el("btn-gen-ide-key").addEventListener("click", function(){
+  /* 已有 Key → 先在卡片里确认，避免误点把正在用的 Key 刷掉 */
+  if(ideKeyCount() > 0){ ideShowKeyConfirm(true); return; }
+  ideRefreshKey();
+});
+if(el("btn-key-refresh-yes")) el("btn-key-refresh-yes").addEventListener("click", function(){
+  ideShowKeyConfirm(false);
+  ideRefreshKey();
+});
+if(el("btn-key-refresh-no")) el("btn-key-refresh-no").addEventListener("click", function(){
+  ideShowKeyConfirm(false);
+});
+
+function ideShortKey(k){ return (k && k.length > 8) ? (k.slice(0, 4) + "…" + k.slice(-4)) : (k || ""); }
+function ideKeyIsPlain(v){ return !!v && v.indexOf("******") < 0 && v.indexOf("wb-") === 0; }
+function ideCopyKey(){
+  var box = el("ide-key-view");
+  if(box && ideKeyIsPlain(box.value)){ copyText(box.value, "Key 已复制（" + ideShortKey(box.value) + "）"); return; }
+  api("/api/keys/current").then(function(res){
+    var k = (res.status === 200 && res.json && res.json.key) ? res.json.key : "";
+    if(!k){ toast("还没有 Key —— 点「刷新」", true); return; }
+    copyText(k, "Key 已复制（" + ideShortKey(k) + "）");
+  }).catch(function(){ toast("读取 Key 失败，请重试", true); });
+}
+if(el("btn-copy-ide-key")) el("btn-copy-ide-key").addEventListener("click", ideCopyKey);
+/* 点进输入框 = 临时显示真值，方便直接框选复制；失焦（或轮询）自动回到打码 */
+if(el("ide-key-view")) el("ide-key-view").addEventListener("focus", function(){
+  var box = this;
+  if(ideKeyIsPlain(box.value)){ box.select(); return; }
+  api("/api/keys/current").then(function(res){
+    var k = (res.status === 200 && res.json && res.json.key) ? res.json.key : "";
+    if(!k) return;
+    box.value = k;
+    try { box.select(); } catch(e){}
+  }).catch(function(){});
+});
+if(el("ide-key-view")) el("ide-key-view").addEventListener("blur", function(){ renderIdeKey(); });function loadIdes(){
+  if(document.hidden || _idesBusy) return Promise.resolve();
+  if(_idesRequest) return _idesRequest;
+  var generation = _idesGeneration;
+  _idesRequest = api("/api/ides", {rawText:true}).then(function(res){
+    if(res.status !== 200 || !res.json || !Array.isArray(res.json.ides)) return;
+    // 操作开始前发出的探测不能覆盖操作后的状态；相同原文不替换 DOM。
+    if(_idesBusy || generation !== _idesGeneration || res.text === _idesPayload) return;
+    renderIdes(res.json);
+    _idesPayload = res.text;
+  }).catch(function(){
+    // 后台探测失败时保留上次状态，下一轮自动重试。
+  }).then(function(){
+    _idesRequest = null;
+    if(generation !== _idesGeneration && !_idesBusy && !document.hidden && idesTabActive()) return loadIdes();
+  });
+  return _idesRequest;
+}
+function ideOwnerHtml(ide){
+  var owner = ide.owner || {};
+  var states = {
+    wbrelay:["on", "WBRelay 接管中"],
+    wbrelay_stale:["cool", "WBRelay 残留（端口不一致）"],
+    external:["neutral", "其他工具或手工接管"],
+    none:["off", "未接管"]
+  };
+  var state = Object.prototype.hasOwnProperty.call(states, owner.state) ? states[owner.state] : ["neutral", "—"];
+  var change = ide.external_change === true
+    ? '<span class="badge cool">配置已被外部改写</span>'
+    : (ide.external_change === false ? "" : '<span class="badge neutral" title="未提供外部改动状态">—</span>');
+  var detail = owner.detail ? ' title="'+esc(owner.detail)+'"' : "";
+  return '<div class="ide-card-owner"><span class="ide-card-owner-label">归属</span>' +
+    '<span class="badge '+state[0]+'"'+detail+'>'+state[1]+'</span>'+change+'</div>';
+}
+function renderIdes(v){
+  var strip = el("ides-strip");
+  if(!strip) return;
+  strip.innerHTML = "";
+  (v.ides || []).forEach(function(ide){
+    var card = document.createElement("div");
+    card.className = "ide-card" + (ide.detected ? "" : " not-detected");
+    var badge = ide.detected
+      ? '<span class="ide-card-badge found">已检测到</span>'
+      : '<span class="ide-card-badge nofound">未检测到</span>';
+    var swOn = ide.enabled ? " on" : "";
+    var swDisabled = ide.detected ? "" : " style=\"opacity:.4;pointer-events:none\"";
+    var restartHtml = "";
+    if(ide.restartable){
+      restartHtml = '<button class="mini" data-ide-restart="'+esc(ide.id)+'">↻ 重启</button>';
+    }
+    card.innerHTML =
+      '<div class="ide-card-head"><span class="ide-card-name">'+esc(ide.name)+'</span>'+badge+'</div>' +
+      ideOwnerHtml(ide) +
+      '<div class="ide-card-ops">' +
+        '<div class="switch'+swOn+'" data-ide-toggle="'+esc(ide.id)+'"'+swDisabled+'></div>' +
+        restartHtml +
+      '</div>';
+    strip.appendChild(card);
+  });
+  // 绑定开关
+  strip.querySelectorAll("[data-ide-toggle]").forEach(function(sw){
+    sw.addEventListener("click", function(){
+      if(sw.getAttribute("aria-busy") === "true") return;
+      var iid = sw.getAttribute("data-ide-toggle");
+      var on = sw.classList.contains("on") ? false : true;
+      sw.setAttribute("aria-busy", "true");
+      _idesBusy++; _idesGeneration++;
+      api("/api/ides/"+iid+"/toggle", {method:"POST", body:{enabled:on}}).then(function(res){
+        if(res.status === 200){
+          toast(on ? "已接管 " + iid : "已恢复 " + iid + " 原始配置");
+        } else {
+          toast((res.json.error||{}).message || "操作失败", true);
+        }
+      }).catch(function(){ toast("操作失败，请重试", true); }).then(function(){
+        sw.removeAttribute("aria-busy");
+        _idesBusy--;
+        loadIdes();
+      });
+    });
+  });
+  // 绑定重启
+  strip.querySelectorAll("[data-ide-restart]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var iid = btn.getAttribute("data-ide-restart");
+      btn.disabled = true; btn.textContent = "重启中…";
+      _idesBusy++; _idesGeneration++;
+      api("/api/ides/"+iid+"/restart", {method:"POST", body:{}}).then(function(res){
+        if(res.status === 200){
+          toast(iid + " 已同步并重启（杀进程：" + (res.json.killed||"") + "）");
+        } else {
+          toast((res.json.error||{}).message || "重启失败", true);
+        }
+      }).catch(function(){ toast("重启失败，请重试", true); }).then(function(){
+        btn.disabled = false; btn.textContent = "↻ 重启";
+        _idesBusy--;
+        loadIdes();
+      });
+    });
+  });
+}
+
+/* ---------- 模型配置页（组级启用：按 base_url 分组，各组独立启用模型） ---------- */
+var GROUP_MODELS = {};
+/* 分组折叠状态：按 base_url 存在浏览器本地，重渲染后保持 */
+var MODELS_COLLAPSED = {};
+try { MODELS_COLLAPSED = JSON.parse(localStorage.getItem("wb_models_collapsed") || "{}") || {}; } catch(e){ MODELS_COLLAPSED = {}; }
+var MODELS_GROUPS = [];
+var ICON_REFRESH = '<svg class="btn-ico" viewBox="0 0 12 12" aria-hidden="true"><path d="M9.8 6a3.8 3.8 0 1 1-1.1-2.68" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9.9 1.7v2.4H7.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+var ICON_CHEV = '<svg class="mg-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 2.5 8.5 6 4.5 9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function modelsSaveCollapsed(){
+  try { localStorage.setItem("wb_models_collapsed", JSON.stringify(MODELS_COLLAPSED)); } catch(e){}
+}
+function modelsSyncCollapsedUI(){
+  Array.prototype.forEach.call(document.querySelectorAll("#models-box [data-group-head]"), function(h){
+    var c = !!MODELS_COLLAPSED[h.dataset.groupHead];
+    h.classList.toggle("open", !c);
+    h.setAttribute("aria-expanded", c ? "false" : "true");
+    var body = h.parentNode ? h.parentNode.querySelector(".mg-body") : null;
+    if(body) body.style.display = c ? "none" : "";
+  });
+}
+function loadModels(){
+  loadIdes();
+  api("/api/models").then(function(res){
+    if(res.status !== 200){ toast((res.json.error||{}).message||"加载模型失败", true); return; }
+    GROUP_MODELS = res.json.group_models_enabled || {};
+    renderModels(res.json);
+  });
+}
+function renderModels(v){
+  var meta = el("models-meta");
+  var p = v.profiles || {};
+  var auto = p.auto || {};
+  var supCount = Object.keys(v.suppliers || {}).length;
+  var grpCount = (v.groups && v.groups.length) ? v.groups.length : supCount;
+  // 统计一律“标签 + 数值”胶囊：标签负责说明量的含义，数值只放数字
+  var chips = [];
+  function chip(label, value){
+    chips.push('<span class="mm-chip"><span>' + esc(label) + ' </span><b>' + esc(String(value)) + '</b></span>');
+  }
+  chip("上次拉取", String(v.fetched_at || "—").replace("T", " "));
+  chip("模型", (v.model_count != null ? v.model_count : 0) + " 个");
+  chip("上游", grpCount + " 个");
+  chip("Key 配置", supCount + " 个");
+  if(p.count != null){
+    chip("模型档案库", p.count + " 个");
+    chip("自动同步", auto.synced_at ? ((auto.known || 0) + " 个已知模型") : "待首次拉取");
+  }
+  meta.innerHTML = chips.join("");
+  var box = el("models-box");
+  box.innerHTML = "";
+  // 供应商配置已变更但缓存未刷新时，顶部醒目提示（防止用户把旧缓存误判为拉取错误）
+  if(v.stale){
+    var warn = document.createElement("div");
+    warn.style.cssText = "display:flex;align-items:center;gap:8px;padding:10px 14px;" +
+      "border-radius:8px;margin-bottom:14px;background:var(--warn-bg,#fff7e6);" +
+      "border:1px solid var(--warn-bd,#ffd591);color:#ad6800;font-size:13px";
+    warn.innerHTML = '<span style="font-size:15px">⚠</span>' +
+      '<span>供应商配置已变更（' + esc(v.stale_desc||"") + '），当前显示 <b>上次拉取结果</b>，' +
+      '点击右上角「重新拉取」获取最新模型清单</span>';
+    box.appendChild(warn);
+  }
+  var groups = v.groups && v.groups.length ? v.groups : Object.keys(v.suppliers||{}).map(function(k){
+    var s = v.suppliers[k]; return {key:k, name:s.name, base_url:s.base_url, sids:[k], ok:s.ok, error:s.error||"", models:s.models||[]};
+  });
+  if(!groups.length){
+    box.innerHTML = '<div class="empty">暂无模型数据 —— 点击「重新拉取」从上游获取，或先检查供应商是否启用</div>';
+    return;
+  }
+  // 路由表反查：模型 -> 可用供应商名（行内标注实际会路由到谁）
+  var rt = v.route_table || {};
+  var supName = {};
+  Object.keys(v.suppliers||{}).forEach(function(k){ supName[k] = (v.suppliers[k].name || k); });
+  var availMap = {};
+  Object.keys(rt).forEach(function(sid){
+    (rt[sid]||[]).forEach(function(mid){
+      (availMap[mid] = availMap[mid] || []).push(supName[sid] || sid);
+    });
+  });
+  MODELS_GROUPS = groups;
+  groups.forEach(function(g){
+    var sec = document.createElement("div");
+    sec.className = "mg-sec";
+    var gm0 = (GROUP_MODELS[g.base_url] || {});
+    var enCount = (g.models||[]).filter(function(m){ return gm0[m.id] !== false; }).length;
+    var keyTxt = (g.sids && g.sids.length > 1) ? ('<em>'+g.sids.length+' 个 Key 配置 · '+g.models.length+' 个模型（已合并）</em>') : ('<em>'+g.models.length+' 个模型</em>');
+    var collapsed = !!MODELS_COLLAPSED[g.base_url];
+    var head = '<div class="sec-title mg-head" data-group-head="'+esc(g.base_url)+'"' +
+      ' role="button" tabindex="0" aria-expanded="'+(collapsed ? "false" : "true")+'">' +
+      ICON_CHEV +
+      '<span class="mg-name">' + esc(g.name) + '</span>' +
+      (g.ok ? '<span class="badge on">正常</span>' : '<span class="badge cool">部分拉取失败：'+esc(g.error||"")+'（显示缓存/降级）</span>') +
+      '<span class="hint">'+esc(g.base_url)+'</span>' + keyTxt +
+      '<span class="hint">已启用 '+enCount+'/'+(g.models||[]).length+'</span>' +
+      '<button class="mg-btn" style="margin-left:10px" data-group-all="'+esc(g.base_url)+'">全启用</button>' +
+      '<button class="mg-btn" style="margin-left:6px" data-group-none="'+esc(g.base_url)+'">全停用</button>' +
+      '</div>';
+    var rows = "";
+    (g.models||[]).forEach(function(m){
+      // 倍率徽章
+      var cred = "-";
+      var ct = m.credits == null ? "" : String(m.credits).trim();
+      var c = ct.toLowerCase().replace("x","").trim();
+      if(c === "0.00" || c === "0") cred = '<span class="badge free">限时免费 0.00x</span>';
+      else if(ct) cred = '<span class="badge rate">'+esc(ct.replace(/^x/i,"") + "x")+'</span>';
+      // 能力徽章
+      var caps = m.supports_vision ? '<span class="badge vis">视觉</span>' : '<span class="badge txt">文本</span>';
+      if(m.supports_tool_calls) caps += '<span class="badge vis">工具</span>';
+      if(m.supports_reasoning) caps += '<span class="badge think">推理</span>';
+      // 思考档位
+      var efforts = (m.reasoning_efforts||[]).length
+        ? m.reasoning_efforts.map(function(e){ return '<span class="badge-effort">'+esc(e)+'</span>'; }).join(" ")
+        : '<span style="color:var(--dim)">—</span>';
+      var avail = availMap[m.id] || [];
+      var availTxt = avail.join('、');
+      var on = gm0[m.id] !== false;
+      rows += '<tr>' +
+        '<td style="text-align:center;min-width:60px"><div class="switch'+(on?" on":"")+'" data-group="'+esc(g.base_url)+'" data-model="'+esc(m.id)+'"></div></td>' +
+        '<td style="text-align:left;min-width:220px" class="mono">' +
+        '<div style="position:relative;height:36px">' +
+        '<b style="display:block;padding-top:4px;line-height:15px;white-space:nowrap">'+esc(m.id)+'</b>' +
+        (availTxt ? '<span style="position:absolute;left:0;bottom:3px;font-size:11px;color:var(--dim,#888);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left" title="可用：'+esc(availTxt)+'">可用：'+esc(availTxt)+'</span>' : '') +
+        '</div></td>' +
+        '<td style="text-align:center">'+cred+'</td>' +
+        '<td style="text-align:center">'+caps+'</td>' +
+        '<td style="text-align:center"><b>'+fmtKM(m.context_window)+'</b></td>' +
+        '<td style="text-align:center"><b>'+fmtKM(m.max_output_tokens)+'</b></td>' +
+        '<td>'+efforts+'</td>' +
+      '</tr>';
+    });
+    sec.innerHTML = head +
+      '<div class="mg-body"' + (collapsed ? ' style="display:none"' : '') + '><div class="table-scroll"><table class="data-cards"><thead><tr>' +
+      '<th style="text-align:center;min-width:60px">启用</th>' +
+      '<th style="text-align:left;min-width:200px">模型 ID</th>' +
+      '<th style="text-align:center;min-width:110px">消费倍率</th>' +
+      '<th style="text-align:center;min-width:110px">模型能力</th>' +
+      '<th style="text-align:center;min-width:90px">上下文窗口</th>' +
+      '<th style="text-align:center;min-width:90px">最大输出</th>' +
+      '<th style="min-width:130px">思考档位</th>' +
+      '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+    box.appendChild(sec);
+  });
+  box.querySelectorAll("[data-group-head]").forEach(function(h){
+    function toggleGroup(){
+      var g = h.dataset.groupHead;
+      MODELS_COLLAPSED[g] = !MODELS_COLLAPSED[g];
+      modelsSaveCollapsed();
+      modelsSyncCollapsedUI();
+    }
+    h.addEventListener("click", function(e){
+      if(e.target && e.target.closest && e.target.closest("button")) return;   // 组内按钮自己处理
+      toggleGroup();
+    });
+    h.addEventListener("keydown", function(e){
+      if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggleGroup(); }
+    });
+  });
+  modelsSyncCollapsedUI();
+  box.querySelectorAll(".switch").forEach(function(sw){
+    sw.addEventListener("click", function(){
+      var mid = sw.dataset.model, g = sw.dataset.group;
+      var gm = GROUP_MODELS[g] = GROUP_MODELS[g] || {};
+      var next = gm[mid] === false;
+      gm[mid] = next;
+      api("/api/models/enabled", {method:"POST", body:{group_models_enabled: GROUP_MODELS}}).then(function(res){
+        if(res.status === 200){ toast((next ? "已启用：" : "已停用：") + mid + "（仅本组）"); loadModels(); }
+        else toast((res.json.error||{}).message || "保存失败", true);
+      });
+    });
+  });
+  box.querySelectorAll("[data-group-all]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var g = btn.dataset.groupAll;
+      var gm = GROUP_MODELS[g] = GROUP_MODELS[g] || {};
+      groups.forEach(function(gg){ if(gg.base_url === g){ (gg.models||[]).forEach(function(m){ gm[m.id] = true; }); } });
+      api("/api/models/enabled", {method:"POST", body:{group_models_enabled: GROUP_MODELS}}).then(function(res){
+        if(res.status === 200){ toast("已启用该组全部模型"); loadModels(); }
+        else toast((res.json.error||{}).message || "保存失败", true);
+      });
+    });
+  });
+  box.querySelectorAll("[data-group-none]").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var g = btn.dataset.groupNone;
+      var gm = GROUP_MODELS[g] = GROUP_MODELS[g] || {};
+      groups.forEach(function(gg){ if(gg.base_url === g){ (gg.models||[]).forEach(function(m){ gm[m.id] = false; }); } });
+      api("/api/models/enabled", {method:"POST", body:{group_models_enabled: GROUP_MODELS}}).then(function(res){
+        if(res.status === 200){ toast("已停用该组全部模型"); loadModels(); }
+        else toast((res.json.error||{}).message || "保存失败", true);
+      });
+    });
+  });
+}
+el("btn-refresh-models").addEventListener("click", function(){
+  el("btn-refresh-models").innerHTML = ICON_REFRESH.replace('class="btn-ico"', 'class="btn-ico spin"') + "拉取中…";
+  el("btn-refresh-models").disabled = true;
+  api("/api/models?refresh=1").then(function(res){
+    el("btn-refresh-models").innerHTML = ICON_REFRESH + "重新拉取";
+    el("btn-refresh-models").disabled = false;
+    if(res.status === 200){
+      GROUP_MODELS = res.json.group_models_enabled || {};
+      renderModels(res.json);
+      var added = (res.json.profiles||{}).added || 0;
+      toast(added > 0
+        ? ("拉取完成：上游模型已刷新 · 档案库自动补全 " + added + " 个新模型")
+        : "拉取完成：上游模型已刷新 · 档案库无需补全");
+    } else toast((res.json.error||{}).message||"拉取失败", true);
+  });
+});
+
+/* ---------- 用量看板页 ---------- */
+var SUMMARY_VIEW = localStorage.getItem("wb_summary_view") || "model";
+var SUMMARY_COLLAPSED = localStorage.getItem("wb_summary_collapsed");
+if(SUMMARY_COLLAPSED !== "0" && SUMMARY_COLLAPSED !== "1") SUMMARY_COLLAPSED = "1";
+function setSummaryCollapsed(collapsed){
+  SUMMARY_COLLAPSED = collapsed ? "1" : "0";
+  el("summary-card").classList.toggle("collapsed", collapsed);
+  var btn = el("btn-summary-toggle");
+  btn.textContent = collapsed ? "展开汇总" : "收起汇总";
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  localStorage.setItem("wb_summary_collapsed", SUMMARY_COLLAPSED);
+}
+el("btn-summary-toggle").addEventListener("click", function(){
+  setSummaryCollapsed(SUMMARY_COLLAPSED !== "1");
+});
+setSummaryCollapsed(SUMMARY_COLLAPSED === "1");
+function scrollToRecentTop(){
+  var sc = el("recent-scroll");
+  if(sc) sc.scrollTop = 0;   // 明细区域内部回到顶部
+}
+function setSummaryView(kind){
+  if(kind !== "sup") kind = "model";
+  SUMMARY_VIEW = kind;
+  document.querySelectorAll("#summary-seg button").forEach(function(b){
+    b.classList.toggle("active", b.dataset.summary === kind);
+  });
+  el("summary-pane-model").classList.toggle("show", kind === "model");
+  el("summary-pane-sup").classList.toggle("show", kind === "sup");
+  localStorage.setItem("wb_summary_view", kind);
+}
+document.querySelectorAll("#summary-seg button").forEach(function(b){
+  b.addEventListener("click", function(){ setSummaryView(b.dataset.summary); });
+});
+setSummaryView(SUMMARY_VIEW);
+var USAGE_RANGE = "today";
+var USAGE_SINCE = 0, USAGE_UNTIL = 0;      // custom 时间戳（秒）
+var USAGE_SUPPLIER = "", USAGE_MODEL = ""; // 筛选
+var RECENT_LIMIT = parseInt(localStorage.getItem("wb_recent_limit") || "20", 10);
+if([10,20,50,100].indexOf(RECENT_LIMIT) < 0) RECENT_LIMIT = 20;
+function usageQuery(page){
+  var q = "range=" + USAGE_RANGE + "&limit=" + RECENT_LIMIT;
+  if(USAGE_RANGE === "custom" && USAGE_SINCE && USAGE_UNTIL){
+    q += "&since=" + USAGE_SINCE + "&until=" + USAGE_UNTIL;
+  }
+  if(USAGE_SUPPLIER) q += "&supplier=" + encodeURIComponent(USAGE_SUPPLIER);
+  if(USAGE_MODEL) q += "&model=" + encodeURIComponent(USAGE_MODEL);
+  if(page) q += "&page=" + page;
+  return q;
+}
+var _usageTimer = null;
+var _curUsagePage = 1;
+var MODEL_PRICES = {};
+var USD_CNY_RATE = 7.2;   // 美元->人民币估算汇率，由 /api/usage 的 usd_cny_rate 下发
+function loadModelPrices(){
+  api("/api/profiles").then(function(r){
+    if(r.status===200){
+      MODEL_PRICES = {};
+      (r.json.models||[]).forEach(function(m){
+        MODEL_PRICES[m.id] = m;
+      });
+    }
+  });
+}
+var USAGE_REFRESH_SEC = 5;   // 用量看板自动刷新间隔（秒）；0 = 关闭自动刷新，由设置页配置
+function setUsageRefreshSec(sec){
+  var v = parseInt(sec, 10);
+  USAGE_REFRESH_SEC = (sec == null || isNaN(v) || v < 0) ? 5 : v;
+  if(el("set-refresh")) el("set-refresh").value = USAGE_REFRESH_SEC;
+  var act = document.querySelector(".tab.active");
+  if(act && act.dataset.tab === "usage") startUsageAutoRefresh();   // 正停在用量页则立即按新间隔重启
+}
+function loadUsageRefreshSetting(){
+  api("/api/settings").then(function(res){
+    if(res.status === 200) setUsageRefreshSec(res.json.usage_refresh_sec);
+  });
+}
+function startUsageAutoRefresh(){
+  stopUsageAutoRefresh();
+  if(!USAGE_REFRESH_SEC) return;   // 0 = 关闭自动刷新，只保留手动切换页签时的单次加载
+  _usageTimer = setInterval(function(){ loadUsage(); }, USAGE_REFRESH_SEC * 1000);
+}
+function stopUsageAutoRefresh(){ if(_usageTimer){ clearInterval(_usageTimer); _usageTimer = null; } }
+
+function loadUsage(){
+  api("/api/usage?" + usageQuery(_curUsagePage)).then(function(res){
+    if(res.status !== 200) return;
+    var v = res.json;
+    if(v.usd_cny_rate) USD_CNY_RATE = v.usd_cny_rate;   // 后端同一来源，不在这里另写常数
+    renderUsage(v);
+    renderFilters(v.filters || {suppliers:[], models:[]});
+  });
+}
+var _filtersSig = "";   // 候选集签名：未变化时不重建 DOM（避免自动刷新打断下拉操作）
+function renderFilters(f){
+  var sups = f.suppliers || [], mods = f.models || [];
+  /* 选中值失效回落：切时间范围后旧选项可能已不在候选集里。
+     若不回落，下拉会显示「全部XX」而查询仍按旧值过滤 —— 界面与结果不一致且必然查空。 */
+  var stale = false;
+  if(USAGE_SUPPLIER && !sups.some(function(s){ return s.id === USAGE_SUPPLIER; })){
+    USAGE_SUPPLIER = ""; stale = true;
+  }
+  if(USAGE_MODEL && mods.indexOf(USAGE_MODEL) < 0){
+    USAGE_MODEL = ""; stale = true;
+  }
+  var sig = sups.map(function(s){ return s.id; }).join("|") + "##" + mods.join("|");
+  if(sig !== _filtersSig){
+    _filtersSig = sig;
+    var selS = el("filter-supplier"), selM = el("filter-model");
+    selS.innerHTML = '<option value="">全部供应商</option>' + sups.map(function(s){
+      return '<option value="'+esc(s.id)+'">'+esc(s.name)+'</option>';
+    }).join("");
+    selM.innerHTML = '<option value="">全部模型</option>' + mods.map(function(m){
+      return '<option value="'+esc(m)+'">'+esc(m)+'</option>';
+    }).join("");
+    selS.value = USAGE_SUPPLIER; selM.value = USAGE_MODEL;
+  }
+  if(stale) loadUsage();   // 值被重置 → 重取一次真实结果（第二次不再回落，无死循环）
+}
+function renderUsage(v){
+  var k = v.kpi || {};
+  var totalReq = (k.requests||0) + (k.errors||0);
+  var okReq = k.requests || 0;
+  var okPct = totalReq > 0 ? (okReq / totalReq * 100).toFixed(1) : "100.0";
+  el("kpis").innerHTML =
+    '<div class="kpi"><div class="k">请求数</div><div class="v">'+k.requests+'</div><div class="s">成功率 '+okPct+'% · 失败 '+k.errors+'</div></div>' +
+    '<div class="kpi accent"><div class="k">Token 消耗</div><div class="v">'+fmtW(k.tokens)+'</div><div class="s">' +
+      '<span style="color:var(--accent)">输入 '+fmtW(k.input_tokens)+'</span> / ' +
+      '<span style="color:var(--accent2)">输出 '+fmtW(k.output_tokens)+'</span> / ' +
+      '<span style="color:var(--think)">思考 '+fmtW(k.reasoning_tokens)+'</span></div></div>' +
+    '<div class="kpi"><div class="k">缓存 Token</div><div class="v">'+fmtW(k.cached_tokens)+'</div><div class="s">命中 '+(k.input_tokens ? (k.cached_tokens/k.input_tokens*100).toFixed(1) : '0')+'% 输入</div></div>' +
+    '<div class="kpi"><div class="k">平均耗时</div><div class="v">'+fmtDur(k.avg_elapsed_ms)+'</div><div class="s">成功请求平均响应时间 · 速度 '+(k.avg_speed_tok_s||0)+' tok/s</div></div>' +
+    '<div class="kpi"><div class="k">估算成本</div><div class="v">¥'+((k.total_cost||0).toFixed(4))+'</div><div class="s">按 OpenRouter 公开价 + 当前汇率估算 · 人民币（非账单金额）</div></div>';
+  el("sum-model-count").textContent = "（"+v.by_model.length+" 个模型）";
+  var maxTok = 1;
+  v.by_model.forEach(function(m){ if(m.tokens > maxTok) maxTok = m.tokens; });
+  var tbm = el("tbl-model").querySelector("tbody");
+  tbm.innerHTML = v.by_model.length ? v.by_model.map(function(m){
+    var ok = m.requests - m.errors;
+    var pct = Math.round((m.tokens||0) / maxTok * 100);
+    return '<tr><td class="mono">'+esc(m.model)+'</td>' +
+      '<td style="text-align:center">'+m.requests+'</td>' +
+      '<td style="text-align:center">'+ok+'</td>' +
+      '<td style="text-align:center">'+(m.errors?('<span style="color:var(--danger)">'+m.errors+'</span>'):'-')+'</td>' +
+      '<td style="text-align:center">'+fmtK(m.cached_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(m.input_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(m.output_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(m.reasoning_tokens)+'</td>' +
+      '<td style="text-align:center"><div class="tkbar"><i style="width:'+pct+'%"></i></div><b>'+fmtK(m.tokens)+'</b></td>' +
+      '<td style="text-align:center">'+fmtDur(m.avg_elapsed_ms)+'</td>' +
+      '<td style="text-align:center">'+(m.avg_speed_tok_s?m.avg_speed_tok_s:'-')+'</td>' +
+      '<td style="text-align:center" class="mono">'+((m.cost||0)!=0?'¥'+(m.cost||0).toFixed(2):'—')+'</td></tr>';
+  }).join("") : '<tr><td colspan="12" class="empty">暂无数据</td></tr>';
+  el("sum-sup-count").textContent = "（"+v.by_supplier.length+" 个）";
+  var maxTokS = 1;
+  v.by_supplier.forEach(function(s){ if(s.tokens > maxTokS) maxTokS = s.tokens; });
+  var tbs = el("tbl-sup").querySelector("tbody");
+  tbs.innerHTML = v.by_supplier.length ? v.by_supplier.map(function(s){
+    var ok = s.requests - s.errors;
+    var pct = Math.round((s.tokens||0) / maxTokS * 100);
+    var sSup = s.realm || "";
+    if(sSup.indexOf("supplier:") === 0) sSup = sSup.slice(9);
+    var sObj = SUPPLIERS.find(function(x){return x.id===sSup;});
+    var sLabel = s.supplier_label || (sObj ? sObj.name : s.realm);
+    return '<tr><td>'+esc(sLabel)+'</td>' +
+      '<td style="text-align:center">'+s.requests+'</td>' +
+      '<td style="text-align:center">'+ok+'</td>' +
+      '<td style="text-align:center">'+(s.errors?('<span style="color:var(--danger)">'+s.errors+'</span>'):'-')+'</td>' +
+      '<td style="text-align:center">'+fmtK(s.cached_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(s.input_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(s.output_tokens)+'</td>' +
+      '<td style="text-align:center">'+fmtK(s.reasoning_tokens)+'</td>' +
+      '<td style="text-align:center"><div class="tkbar"><i style="width:'+pct+'%"></i></div><b>'+fmtK(s.tokens)+'</b></td>' +
+      '<td style="text-align:center">'+fmtDur(s.avg_elapsed_ms)+'</td>' +
+      '<td style="text-align:center">'+(s.avg_speed_tok_s?s.avg_speed_tok_s:'-')+'</td>' +
+      '<td style="text-align:center" class="mono">'+((s.cost||0)!=0?'¥'+(s.cost||0).toFixed(2):'—')+'</td></tr>';
+  }).join("") : '<tr><td colspan="12" class="empty">暂无数据</td></tr>';
+  var rc = v.recent || {};
+  renderRecent(rc);
+}
+// 最近请求原始数据：cost-tip 只按行索引取数，避免把 JSON 拼进 HTML 属性
+var USAGE_ROWS = [];
+function renderRecent(rc){
+  if(rc.page) _curUsagePage = rc.page;
+  el("recent-meta").textContent = "（共 "+rc.total+" 条 · 第 "+rc.page+"/"+rc.pages+" 页）";
+  var tbr = el("tbl-recent").querySelector("tbody");
+  USAGE_ROWS = rc.items || [];
+  tbr.innerHTML = (rc.items||[]).length ? rc.items.map(function(r, i){
+    var st = r.error ? '<span class="badge off">失败 '+(r.status||"")+'</span>'
+                     : '<span class="badge on">完成</span>';
+    var sup = r.realm || "";
+    if(sup.indexOf("supplier:") === 0) sup = sup.slice(9);
+    else if(sup.indexOf("realm:") === 0) sup = sup.slice(6);
+    var supObj = SUPPLIERS.find(function(x){return x.id===sup;});
+    var supLabel = r.supplier_label || (supObj ? supObj.name : sup);
+    var iso = r.iso || "";
+    var dt = iso.indexOf("T") >= 0 ? iso.slice(0, iso.indexOf("T")) : iso;
+    var tm = iso.indexOf("T") >= 0 ? iso.slice(iso.indexOf("T")+1) : "";
+    var genMs = (r.elapsed_ms && r.ttft_ms != null) ? Math.max(r.elapsed_ms - r.ttft_ms, 1) : r.elapsed_ms;
+    var speed = (r.output_tokens && genMs) ? (r.output_tokens / (genMs / 1000)).toFixed(1) : "—";
+    var ttftS = r.ttft_ms != null ? (r.ttft_ms/1000) : null;
+    var ttftColor = ttftS==null ? "" : (ttftS < 5 ? "#2ecc71" : (ttftS < 10 ? "#f39c12" : "#e74c3c"));
+    var ttftStr = ttftS==null ? "—" : ttftS.toFixed(1)+" s";
+    return '<tr>' +
+      '<td class="mono">'+esc(dt)+'<br>'+esc(tm)+'</td>' +
+      '<td class="mono"><b>'+esc(r.model)+'</b>'+(r.effort?'<div style="margin-top:3px"><span class="badge-effort">'+esc(r.effort)+'</span></div>':'')+'</td>' +
+      '<td class="mono" style="font-size:11px;color:var(--dim)">'+esc(supLabel)+'</td>' +
+      '<td style="text-align:center"><span class="badge '+(r.stream?"on":"off")+'">'+(r.stream?"流式":"非流式")+'</span></td>' +
+      '<td style="text-align:center">'+st+'</td>' +
+      '<td>'+(r.stream?'<div><span style="color:'+ttftColor+'">首字 '+ttftStr+'</span></div>':'')+(r.elapsed_ms!=null?'<div style="margin-top:2px;color:var(--dim)">耗时 '+fmtDur(r.elapsed_ms)+'</div>':'')+'</td>' +
+      '<td style="text-align:center" class="mono">'+speed+'</td>' +
+      '<td>'+fmtK(r.input_tokens)+' / '+fmtK(r.output_tokens)+' / '+fmtK(r.reasoning_tokens)+(r.cached_tokens?'<div style="margin-top:2px;font-size:11px;color:var(--dim)">缓存: '+fmtK(r.cached_tokens)+'</div>':'')+'</td>' +
+      '<td class="mono">'+(r.cached_tokens && r.input_tokens ? (r.cached_tokens/r.input_tokens*100).toFixed(1)+'%' : '—')+'</td>' +
+      '<td style="text-align:center"><b>'+fmtK(r.tokens)+'</b></td>' +
+      '<td style="text-align:center" class="mono" onmouseenter="showCostTip(event,'+i+')" onmouseleave="hideCostTip()">'+(r.cost!=null?'¥'+r.cost.toFixed(4):'—')+'</td></tr>';
+  }).join("") : '<tr><td colspan="11" class="empty">暂无请求记录</td></tr>';
+  var pgInfo = el("pg-info"), pgBtns = el("pg-btns");
+  pgInfo.textContent = "第 "+rc.page+" / "+rc.pages+" 页 · 共 "+rc.total+" 条 · 每页 "+rc.page_size+" 条";
+  pgBtns.innerHTML = "";
+  if(rc.pages > 1){
+    function goto(p){
+      if(p < 1 || p > rc.pages) return;
+      _curUsagePage = p;
+      api("/api/usage?" + usageQuery(p)).then(function(r){
+        if(r.status === 200){ renderRecent(r.json.recent); scrollToRecentTop(); }
+      });
+    }
+    var prev = document.createElement("button");
+    prev.className = "mini";
+    prev.textContent = "‹ 上一页";
+    prev.disabled = rc.page <= 1;
+    prev.addEventListener("click", function(){ goto(rc.page - 1); });
+    pgBtns.appendChild(prev);
+    var start = Math.max(1, rc.page - 2), end = Math.min(rc.pages, rc.page + 2);
+    for(var p = start; p <= end; p++){
+      var b = document.createElement("button");
+      b.className = "mini" + (p === rc.page ? " primary" : "");
+      b.textContent = p;
+      b.addEventListener("click", function(){ goto(parseInt(this.textContent)); });
+      pgBtns.appendChild(b);
+    }
+    var next = document.createElement("button");
+    next.className = "mini";
+    next.textContent = "下一页 ›";
+    next.disabled = rc.page >= rc.pages;
+    next.addEventListener("click", function(){ goto(rc.page + 1); });
+    pgBtns.appendChild(next);
+  }
+}
+document.querySelectorAll("#range-seg button").forEach(function(b){
+  b.addEventListener("click", function(){
+    document.querySelectorAll("#range-seg button").forEach(function(x){ x.classList.remove("active"); });
+    b.classList.add("active");
+    USAGE_RANGE = b.dataset.r;
+    if(USAGE_RANGE === "custom"){
+      el("custom-range").style.display = "inline-flex";
+      if(!el("range-from").value){
+        var d = new Date();
+        el("range-from").value = d.toISOString().slice(0,10);
+        el("range-to").value = d.toISOString().slice(0,10);
+      }
+    } else {
+      el("custom-range").style.display = "none";
+    }
+    _curUsagePage = 1;   // 切时间范围必须回第 1 页：新范围总页数可能少于此前的页码
+    loadUsage();
+  });
+});
+el("btn-range-apply").addEventListener("click", function(){
+  var f = el("range-from").value, t = el("range-to").value;
+  if(!f || !t){ toast("请选择起止日期", true); return; }
+  var fromT = new Date(f + "T00:00:00").getTime() / 1000;
+  var toT = new Date(t + "T23:59:59").getTime() / 1000;
+  USAGE_RANGE = "custom";
+  USAGE_SINCE = fromT; USAGE_UNTIL = toT;
+  document.querySelectorAll("#range-seg button").forEach(function(x){ x.classList.remove("active"); });
+  document.querySelector('#range-seg button[data-r="custom"]').classList.add("active");
+  _curUsagePage = 1;
+  loadUsage();
+});
+el("filter-supplier").addEventListener("change", function(){
+  USAGE_SUPPLIER = this.value;
+  _curUsagePage = 1;   // 筛选变化后条数变少，旧页码可能越界
+  loadUsage();
+});
+el("filter-model").addEventListener("change", function(){
+  USAGE_MODEL = this.value;
+  _curUsagePage = 1;
+  loadUsage();
+});
+el("btn-filter-reset").addEventListener("click", function(){
+  USAGE_SUPPLIER = ""; USAGE_MODEL = "";
+  USAGE_RANGE = "today"; USAGE_SINCE = 0; USAGE_UNTIL = 0;
+  document.querySelectorAll("#range-seg button").forEach(function(x){ x.classList.remove("active"); });
+  document.querySelector('#range-seg button[data-r="today"]').classList.add("active");
+  el("custom-range").style.display = "none";
+  _curUsagePage = 1;
+  loadUsage();
+});
+document.querySelectorAll("#recent-limits button").forEach(function(b){
+  b.classList.toggle("primary", parseInt(b.dataset.limit, 10) === RECENT_LIMIT);
+  b.addEventListener("click", function(){
+    RECENT_LIMIT = parseInt(b.dataset.limit, 10);
+    localStorage.setItem("wb_recent_limit", String(RECENT_LIMIT));
+    document.querySelectorAll("#recent-limits button").forEach(function(x){ x.classList.remove("primary"); });
+    b.classList.add("primary");
+    _curUsagePage = 1;   // 每页条数变化后旧页码无意义
+    loadUsage();
+  });
+});
+
+/* ---------- 设置页 ---------- */
+/* 面板代理 /proxy-wb：所有者 2026-10-14 决定恢复「面板查看」（见 docs/方案-上游服务面板恢复.md）。
+   只同源呈现上游自己的界面；WBRelay 不启停、不自启、不守护任何外部进程（R5 / R6 不变）。 */
+/* 面板自动登录：iframe 加载后在**同源** iframe 内填入口令并提交。口令只来自浏览器
+   localStorage（key `wb_upstream_pwd`），服务端永不落盘；任何失败都静默降级为手动登录。 */
+function wbAutologin(frame){
+  try{
+    var doc = frame.contentWindow && frame.contentWindow.document;
+    if(!doc) return;                       /* 跨域 / 尚未就绪：不碰，等用户手动登录 */
+    var pwd = doc.querySelector("#panelPwdInput") || doc.querySelector('input[type="password"]');
+    if(!pwd) return;                       /* 面板没有密码框（可能已登录或不需要） */
+    api("/api/upstream/status").then(function(res){
+      if(res.status !== 200 || !res.json.wb_autologin) return;
+      var val = localStorage.getItem("wb_upstream_pwd");
+      if(!val) return;                     /* 未设置口令：不硬编码默认值，让用户手输 */
+      pwd.value = val;
+      var win = frame.contentWindow;
+      if(typeof win.submitPanelLogin === "function"){ win.submitPanelLogin(); return; }
+      var btn = doc.querySelector('button[type="submit"]') || doc.querySelector("button");
+      if(btn) btn.click();
+    }).catch(function(){ /* 静默降级：提示由用户自己看到的手动登录框承担 */ });
+  }catch(e){ /* 绝不抛到看板：自动登录只是便利，失败不影响页面 */ }
+}
+
+/* 面板 iframe 的自动登录：内联 onload 看不到本作用域的函数，这里在同一个作用域里挂监听 */
+if(el("upstream-frame")) el("upstream-frame").addEventListener("load", function(){ wbAutologin(this); });
+/* 启停按钮图标：用内联 SVG 而不是 ⏹ / ▶ 字符（在 Windows 上会走彩色表情字体，风格不统一） */
+
+function applyUpstreamEnabled(enabled){
+  var tab = document.getElementById("tab-upstream");
+  if(tab) tab.style.display = enabled ? "" : "none";
+  var conf = el("upstream-conf-wrap");
+  if(conf) conf.style.display = enabled ? "" : "none";
+  var hint = el("upstream-off-hint");
+  if(hint) hint.style.display = enabled ? "none" : "block";
+  /* 若正停留在上游服务页且功能被关闭 → 自动切回设置页 */
+  if(!enabled){
+    var upPage = el("pg-upstream");
+    if(upPage && upPage.classList.contains("show")){
+      var st = document.querySelector('.tab[data-tab="settings"]');
+      if(st) st.click();
+    }
+  }
+}
+
+function loadUpstream(){
+  api("/api/upstream/status").then(function(res){
+    if(res.status !== 200) return;
+    var s = res.json;
+    var enabled = s.enabled !== false;
+    applyUpstreamEnabled(enabled);
+    if(el("set-upstream-enabled")) el("set-upstream-enabled").checked = enabled;
+    var on = !!s.online;
+    el("upstream-status").innerHTML =
+      '<span class="badge '+(on?"on":"off")+'">'+(on?"上游服务在线":"上游服务离线")+'</span> ' +
+      '<span style="color:var(--dim);font-size:12px">端口 '+(s.port||"—")+'</span>';
+    var lbl = s.label || "";
+    if(el("upstream-name")) el("upstream-name").textContent = lbl ? ("· " + lbl) : "";
+    if(el("upstream-page-name")) el("upstream-page-name").textContent = lbl ? ("· " + lbl) : "";
+    /* 面板代理可用（开关打开）且上游在线 → 同源 iframe 呈现；否则给说明，不渲染 iframe */
+    var proxyOn = s.proxy_enabled !== false;
+    var frame = el("upstream-frame");
+    el("upstream-offline").style.display = on ? "none" : "block";
+    if(el("upstream-frame-wrap")) el("upstream-frame-wrap").style.display = (on && proxyOn) ? "block" : "none";
+    if(el("upstream-proxy-notice")) el("upstream-proxy-notice").style.display = (on && proxyOn) ? "none" : "block";
+    if(el("upstream-proxy-policy")) el("upstream-proxy-policy").textContent = s.proxy_policy || "";
+    if(el("upstream-direct-url")){
+      el("upstream-direct-url").textContent = s.url ? ("外部面板自身地址：" + s.url) : "";
+    }
+    if(frame){
+      /* 只在真正要展示时挂 src（lazy 加载 + 不浪费一次上游请求） */
+      if(on && proxyOn && frame.getAttribute("src") !== "/proxy-wb/") frame.setAttribute("src", "/proxy-wb/");
+      if(!(on && proxyOn)) frame.setAttribute("src", "about:blank");
+    }
+    /* 设置页上游服务配置回填 */
+    if(el("set-upstream-dir")){
+      if(el("set-upstream-dir").value !== (s.upstream_dir || "")){ el("set-upstream-dir").value = s.upstream_dir || ""; }
+      el("upstream-dir-hint").textContent = s.upstream_dir
+        ? (!s.entry_found
+            ? "该目录未找到 wb_proxy.py（项目原生入口），请检查目录"
+            : "已检测到原生入口 wb_proxy.py · 端口 " + (s.port||8788) + " · 只读状态（WBRelay 不启停外部进程）")
+        : "未配置 —— 请填写上游服务项目目录";
+    }
+    /* 自动登录：面板代理可用时才解禁；口令只写浏览器 localStorage，服务端不保存 */
+    if(el("set-upstream-autologin")){
+      var canAuto = s.proxy_enabled !== false;
+      el("set-upstream-autologin").disabled = !canAuto;
+      el("set-upstream-autologin").checked = canAuto && !!s.wb_autologin;
+    }
+    if(el("set-upstream-password")) el("set-upstream-password").placeholder = "未设置时请手动登录";
+    if(el("upstream-port-badge")){
+      /* 端口由上游服务入口文件解析 = 已检测（绿）；解析不到退回 wb_proxy.py 默认 8788 = 未检测（灰） */
+      var detected = !!s.entry_found;
+      var badge = el("upstream-port-badge");
+      badge.textContent = detected
+        ? "· 服务端口 " + (s.port || 8788) + "（自动检测）"
+        : "· 服务端口 " + (s.port || 8788) + "（默认值，未检测到入口）";
+      badge.className = "badge " + (detected ? "vis" : "neutral");
+    }
+  });
+}
+el("btn-save-upstream-dir").addEventListener("click", function(){
+  var d = el("set-upstream-dir").value.trim();
+  api("/api/upstream/settings", {method:"POST", body: {dir: d}}).then(function(res){
+    if(res.status === 200){ toast("上游服务目录已保存"); loadUpstream(); settingsSetState(false); }
+    else toast((res.json.error||{}).message || "保存失败", true);
+  });
+});
+el("set-upstream-enabled").addEventListener("change", function(){
+  var enabled = el("set-upstream-enabled").checked;
+  applyUpstreamEnabled(enabled);   // 本地即时反馈
+  api("/api/upstream/settings", {method:"POST", body:{enabled: enabled}}).then(function(res){
+    if(res.status === 200){
+      toast(enabled ? "上游服务管理已开启" : "上游服务管理已关闭（页签与配置已隐藏）");
+    } else {
+      el("set-upstream-enabled").checked = !enabled;
+      applyUpstreamEnabled(!enabled);
+      toast((res.json.error||{}).message || "保存失败", true);
+    }
+  });
+});
+
+el("btn-save-upstream-conf").addEventListener("click", function(){
+  var pwdVal = el("set-upstream-password").value.trim();
+  var autoLogin = el("set-upstream-autologin").checked;
+  /* 口令只在「自动登录」开启时写浏览器 localStorage；关掉就不写、也不清（用户自己的数据）。
+     后端收到 wb_password 一律丢弃，服务端永不落盘。 */
+  if(pwdVal && autoLogin) localStorage.setItem("wb_upstream_pwd", pwdVal);
+  var body = {
+    dir: el("set-upstream-dir").value.trim(),
+    enabled: el("set-upstream-enabled").checked,
+    autostart: false,   /* 未恢复：外部进程开机自启（R5） */
+    watchdog: false,    /* 未恢复：进程守护自动拉起（R5） */
+    wb_autologin: autoLogin,
+    wb_password: pwdVal
+  };
+  api("/api/upstream/settings", {method:"POST", body: body}).then(function(res){
+    if(res.status === 200){
+      if(res.json.reg_error){ toast("已保存，但开机启动写入失败：" + res.json.reg_error, true); }
+      else { toast("上游服务配置已保存并生效"); }
+      loadUpstream();
+      settingsSetState(false);
+    }
+    else toast((res.json.error||{}).message || "保存失败", true);
+  });
+});
+/* R6：外部上游启停按钮与 /api/upstream/start|stop 调用已移除（上游项目只读）。 */
+function loadSettings(){
+  loadUpstream();
+  api("/api/settings").then(function(res){
+    if(res.status !== 200) return;
+    var s = res.json;
+    el("set-port").value = s.port;
+    el("set-timeout").value = s.default_timeout_sec;
+    el("set-cool").value = s.cooldown_sec;
+    el("set-cool429").value = s.cooldown_429_sec;
+    el("set-retention").value = s.usage_retention_days;
+    setUsageRefreshSec(s.usage_refresh_sec);
+    el("set-autostart").checked = !!s.autostart;
+    el("set-auth").checked = !!s.require_api_key;
+    el("set-admin-token").checked = !!s.require_admin_token;
+    el("admin-token-field").style.display = s.require_admin_token ? "" : "none";
+    el("set-admin-token-value").value = "";
+    el("set-admin-token-value").placeholder = s.admin_token_set
+      ? "已设置（留空则不修改）" : "保存时留空将自动生成";
+    renderKeys(s.api_keys || []);
+    el("keys-wrap").style.display = s.require_api_key ? "" : "none";
+    el("set-codex-provider").value = s.codex_provider || "WBRelay";
+    el("set-theme").value = THEME;   // 回显当前主题（原先恒为第一项）
+    renderPaths(s.paths, s.path_exists);
+    settingsSetState(false);
+    settingsSyncNav();
+  });
+}
+/* ---------- 设置页：分区导航 / 未保存提示 ---------- */
+var SETTINGS_DIRTY = false;
+function settingsSetState(dirty){
+  SETTINGS_DIRTY = !!dirty;
+  var st = el("settings-state");
+  if(!st) return;
+  st.textContent = dirty ? "有未保存的改动，点右侧按钮保存" : "改动仅在保存后生效";
+  st.className = dirty ? "state dirty" : "state";
+}
+function settingsSyncNav(){
+  var box = el("settings-scroll");
+  if(!box) return;
+  var secs = document.querySelectorAll("#settings-main .set-card");
+  if(!secs.length) return;
+  var top = box.getBoundingClientRect().top, cur = secs[0].id;
+  secs.forEach(function(s){ if(s.getBoundingClientRect().top - top <= 28) cur = s.id; });
+  if(box.scrollTop + box.clientHeight >= box.scrollHeight - 4) cur = secs[secs.length - 1].id;
+  document.querySelectorAll("#settings-nav button").forEach(function(b){
+    b.classList.toggle("active", b.dataset.sec === cur);
+  });
+}
+document.querySelectorAll("#settings-nav button").forEach(function(b){
+  b.addEventListener("click", function(){
+    var box = el("settings-scroll"), sec = el(b.dataset.sec);
+    if(!box || !sec) return;
+    var top = sec.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 6;
+    box.scrollTo({top: top < 0 ? 0 : top, behavior:"smooth"});
+    document.querySelectorAll("#settings-nav button").forEach(function(x){ x.classList.remove("active"); });
+    b.classList.add("active");
+  });
+});
+(function settingsSpy(){
+  var box = el("settings-scroll");
+  if(!box) return;
+  var pending = false;
+  box.addEventListener("scroll", function(){
+    if(pending) return;
+    pending = true;
+    requestAnimationFrame(function(){ pending = false; settingsSyncNav(); });
+  });
+  window.addEventListener("resize", settingsSyncNav);
+})();
+(function settingsDirtyWatch(){
+  var main = el("settings-main");
+  if(!main) return;
+  ["input","change"].forEach(function(ev){
+    main.addEventListener(ev, function(e){
+      var t = e.target;
+      if(!t) return;
+      /* 上游服务分区各行由各自的「保存」按钮提交，不计入主表单未保存状态 */
+      if(t.closest && t.closest("#sec-upstream")) return;
+      settingsSetState(true);
+    });
+  });
+})();
+
+el("set-auth").addEventListener("change", function(){
+  el("keys-wrap").style.display = el("set-auth").checked ? "" : "none";
+});
+el("set-theme").addEventListener("change", function(){
+  THEME = el("set-theme").value;
+  localStorage.setItem("wb_theme", THEME);
+  themeApply(THEME);
+});
+el("set-admin-token").addEventListener("change", function(){
+  el("admin-token-field").style.display = el("set-admin-token").checked ? "" : "none";
+});
+el("btn-save-settings").addEventListener("click", function(){
+  var body = {
+    port: parseInt(el("set-port").value) || 8789,
+    default_timeout_sec: parseInt(el("set-timeout").value) || 120,
+    cooldown_sec: parseInt(el("set-cool").value) || 60,
+    cooldown_429_sec: parseInt(el("set-cool429").value) || 30,
+    usage_retention_days: parseInt(el("set-retention").value) || 0,
+    usage_refresh_sec: (function(){ var v = parseInt(el("set-refresh").value, 10); return isNaN(v) ? 5 : Math.max(0, Math.min(600, v)); })(),
+    autostart: el("set-autostart").checked,
+    require_api_key: el("set-auth").checked,
+    require_admin_token: el("set-admin-token").checked,
+    admin_token: el("set-admin-token-value").value.trim(),
+    codex_provider: el("set-codex-provider").value.trim()
+  };
+  api("/api/settings", {method:"POST", body: body}).then(function(res){
+    if(res.status === 200){
+      var tok = res.json.admin_token;
+      if(el("set-admin-token").checked && tok) localStorage.setItem("wb_admin_token", tok);
+      if(!el("set-admin-token").checked) localStorage.removeItem("wb_admin_token");
+      if(res.json.admin_token) el("set-admin-token-value").value = res.json.admin_token;
+      setUsageRefreshSec(body.usage_refresh_sec);   // 刷新间隔即时生效（无需重启）
+      toast(res.json.port_changed ? "设置已保存（端口变更需重启网关生效）" : "设置已保存生效");
+      if(res.json.port_changed) el("set-port").value = res.json.port;
+      settingsSetState(false);
+    } else toast((res.json.error||{}).message || "保存失败", true);
+  });
+});
+el("btn-copy-admin-token").addEventListener("click", function(){
+  var v = el("set-admin-token-value").value;
+  if(!v){ toast("令牌为空：先保存设置生成令牌", true); return; }
+  var ta = document.createElement("textarea");
+  ta.value = v; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); toast("令牌已复制"); } catch(e){ toast("复制失败，请手动选择复制", true); }
+  document.body.removeChild(ta);
+});
+
+/* API Keys */
+var KEYS = [];
+function renderKeys(keys){
+  KEYS = keys || [];
+  renderIdeKey();
+  var box = el("keys-box");
+  box.innerHTML = "";
+  KEYS.forEach(function(k, i){
+    var row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:6px;min-width:0";
+    row.innerHTML =
+      '<input data-kf="name" value="'+esc(k.name)+'" style="flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--fg);font-size:13px" placeholder="名称">' +
+      '<input data-kf="key" value="'+(k.masked ? esc(k.masked) : "")+'" style="flex:2;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--fg);font-size:13px;font-family:var(--mono)" placeholder="Key（留空保持原样）">' +
+      '<button class="ghost danger" data-kdel="'+i+'">删除</button>';
+    box.appendChild(row);
+  });
+  box.querySelectorAll("[data-kdel]").forEach(function(b){
+    b.addEventListener("click", function(){ KEYS.splice(parseInt(b.dataset.kdel),1); renderKeys(KEYS); });
+  });
+}
+el("btn-add-key").addEventListener("click", function(){
+  KEYS.push({id:"", name:"Codex", masked:"", enabled:true});
+  renderKeys(KEYS);
+});
+el("btn-save-keys").addEventListener("click", function(){
+  var out = [];
+  KEYS.forEach(function(k, i){
+    var row = el("keys-box").children[i];
+    if(!row) return;
+    var name = row.querySelector('[data-kf="name"]').value.trim() || "Codex";
+    var keyv = row.querySelector('[data-kf="key"]').value.trim();
+    var masked = keyv.indexOf("******") >= 0;
+    out.push({id: k.id, name: name, key: masked ? "" : keyv, enabled: true});
+  });
+  api("/api/keys", {method:"POST", body:{api_keys: out}}).then(function(res){
+    if(res.status === 200){ toast("Keys 已保存"); loadSettings(); }
+    else toast((res.json.error||{}).message || "保存失败", true);
+  });
+});
+
+/* 配置文件位置（只读展示 + 复制） */
+var PATH_FIELDS = [
+  ["path-data-dir", "data_dir"], ["path-settings", "settings"], ["path-usage", "usage"],
+  ["path-profiles", "profiles"], ["path-models-cache", "models_cache"],
+  ["path-log", "log"], ["path-ide-backups", "ide_backups"]
+];
+function renderPaths(paths, exists){
+  /* 旧网关进程不返回 paths 字段：此时只能显示「未提供」，不能谎报「未生成」 */
+  var known = !!(paths && typeof paths === "object" && Object.keys(paths).length);
+  PATH_FIELDS.forEach(function(f){
+    var inp = el(f[0]);
+    if(inp){
+      var p = known ? (paths[f[1]] || "") : "";
+      inp.value = p;
+      inp.title = p;
+    }
+    var badge = el(f[0] + "-badge");
+    if(!badge) return;
+    if(!known){
+      badge.textContent = "未提供";
+      badge.className = "badge warn";
+      return;
+    }
+    var ok = !!(exists && exists[f[1]]);
+    badge.textContent = ok ? "已存在" : "未生成";
+    badge.className = "badge " + (ok ? "vis" : "neutral");
+  });
+  var note = el("paths-note");
+  if(note){
+    note.textContent = known
+      ? "以上路径由网关进程实测返回；显示「未生成」的文件会在首次写入时自动创建。"
+      : "当前网关进程未返回路径信息（通常是本次更新前已启动的进程）：重启网关后即可显示真实路径与状态。";
+  }
+}
+function copyText(val, successMessage){
+  var ta = document.createElement("textarea");
+  ta.value = val;
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    if(!document.execCommand("copy")) throw new Error("copy failed");
+    toast(successMessage);
+  } catch(err){ toast("复制失败，请手动选择复制", true); }
+  document.body.removeChild(ta);
+}
+(function pathsCopy(){
+  document.addEventListener("click", function(e){
+    var btn = e.target && e.target.closest ? e.target.closest("[data-copy]") : null;
+    if(!btn) return;
+    var src = el(btn.dataset.copy);
+    var val = src ? src.value : "";
+    var label = btn.dataset.copy === "ide-base-url" ? "地址" : "路径";
+    if(!val){ toast(label + "为空", true); return; }
+    copyText(val, label + "已复制");
+  });
+})();
+
+/* 初始 */
+loadState();
+loadUpstream();   // 启动即应用上游服务开关（决定其页签是否显示）
+loadUsageRefreshSetting();   // 取用量看板自动刷新间隔（设置页可改，0 = 关闭）
+</script>
+<div id="cost-tip" style="display:none;position:fixed;z-index:9999;background:#1a2332;border:1px solid #3a4a6a;border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.7;color:#d0d8e8;box-shadow:0 4px 20px rgba(0,0,0,0.5);pointer-events:none;max-width:280px"></div>
+<script>
+function showCostTip(e, i){
+  var r = (USAGE_ROWS && i >= 0 && i < USAGE_ROWS.length) ? USAGE_ROWS[i] : null;
+  if(!r) return;
+  var model = r.model || "";
+  var p = MODEL_PRICES[model] || {};
+  var pp = p.prompt_price || 0, cp = p.completion_price || 0, crp = p.cache_read_price || 0;
+  var rate = USD_CNY_RATE || 7.2;   // 与后端 _cost_per_request 同一个来源
+  var html = '<b style="color:#64c8ff">'+esc(model)+'</b><br>';
+  html += '输入单价: ¥'+(pp*rate*1e6).toFixed(2)+' / 百万token<br>';
+  html += '输出单价: ¥'+(cp*rate*1e6).toFixed(2)+' / 百万token<br>';
+  if(crp) html += '缓存单价: ¥'+(crp*rate*1e6).toFixed(2)+' / 百万token<br>';
+  html += '<hr style="border-color:#3a4a6a;margin:6px 0">';
+  html += '本次输入: '+fmtK(r.input_tokens||0)+'<br>';
+  html += '本次输出: '+fmtK(r.output_tokens||0)+'<br>';
+  if(r.cached_tokens) html += '其中缓存: '+fmtK(r.cached_tokens)+'<br>';
+  html += '<b style="color:#2ecc71">合计: ¥'+(r.cost!=null?r.cost.toFixed(4):'—')+'</b>';
+  html += '<div style="margin-top:6px;color:#8899bb;font-size:11px">按 OpenRouter 公开价 + 当前汇率估算，非账单金额</div>';
+  var tip = document.getElementById('cost-tip');
+  tip.innerHTML = html;
+  tip.style.display = 'block';
+  var x = e.clientX + 12, y = e.clientY + 12;
+  if(x + 300 > window.innerWidth) x = e.clientX - 300;
+  tip.style.left = x + 'px';
+  tip.style.top = y + 'px';
+}
+function hideCostTip(){ document.getElementById('cost-tip').style.display = 'none'; }
+</script>
+</body>
+</html>

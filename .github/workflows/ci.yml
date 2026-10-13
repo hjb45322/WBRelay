@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 中文输出：GitHub Actions 的 Windows 运行器默认控制台是 cp1252，中文会被降级成 "?"。
+# 固定成 UTF-8，让远端日志与本地一致。脚本自身另有 errors="replace" 兜底，
+# 因此**这份配置缺失时只会变成乱码，不会崩**（2026-10-14 首次推送就是被这个编码坑到的）。
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 语法检查（入口 + 包 + 工具）
+        run: |
+          python -m py_compile relay.py
+          python -m compileall -q wbrelay
+          python -m compileall -q tools
+
+      - name: 看板资源与包内副本一致性
+        run: python tools/sync_dashboard.py --check
+
+      - name: 看板内联 JS 语法检查
+        run: python tests/check_dashboard_js.py
+
+      - name: 打包布局（包发现 / 静态资源 / spec 无用户数据）
+        run: python tests/test_package_layout.py
+
+      - name: 接口巡检（只读模式，零写入）
+        run: python tests/exercise_core.py
+
+      - name: 单元与护栏测试
+        run: |
+          python tests/test_catalog_guard.py
+          python tests/test_window_state.py
+          python tests/test_usage_filters.py
+          python tests/test_supplier_label.py
+          python tests/test_atomic_writes.py
+
+      - name: 只读零写入
+        run: python tests/test_readonly_zero_write.py
+
+      - name: 核心语义与重试边界（进程内 mock 上游）
+        run: python tests/test_routing_semantics.py
+
+      - name: 机密回显与日志脱敏
+        run: python tests/test_secret_redaction.py
+
+      - name: 安全加固（边界校验 / Host-Origin / 代理停用）
+        run: python tests/test_hardening.py
+
+      - name: SSE 终止判定（按 wire protocol 分别判定）
+        run: python tests/test_sse_terminators.py
+
+      - name: 协议矩阵四象限（chat/responses × chat/responses）
+        run: python tests/test_protocol_matrix.py
+
+      - name: OpenCode 注入形态（档位 variants / 无效字段 / 幂等）
+        run: python tests/test_opencode_inject.py
+
+      - name: R6 外部上游只读（不能启停 / 操作计划任务 / 代理已停用）
+        run: python tests/test_upstream_readonly.py
+
+      - name: 上游读取限长与超时（进程内 mock，零真实联网）
+        run: python tests/test_upstream_read_limits.py
+
+      - name: 设置保存与网关自启边界（注册表全 mock）
+        run: python tests/test_settings_autostart.py
+
+      - name: 重启工具进程识别（R7；mock + 只读进程信息往返）
+        run: python tests/test_restart_gateway.py
+
+      - name: 隔离启动器数据目录路径策略（规范化 / junction）
+        run: python tests/test_data_path_policy.py
+
+      - name: 敏感信息扫描器回归（显式标识清单 / 个人路径三种写法）
+        run: python tests/test_scan_sensitive.py
+
+      - name: 冻结 EXE 父子进程所有权判定（纯判定自检，不启动 EXE）
+        run: python tests/frozen_onefile_ownership.py --self-test
+
+      - name: 隔离冒烟测试（只读，零写入）
+        run: python tests/smoke_headless.py 18789
+
+      - name: 端到端（自建 mock 18788/18789 + 隔离实例 18790）
+        run: python tests/test_e2e.py
+
+      - name: 兜底凭据样式扫描
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Recurse -File |
+            Where-Object { $_.FullName -notmatch '\\\.git\\' -and
+                           $_.Extension -match '^\.(py|js|md|html|bat|sh|ps1|spec|toml|json|yml)$' }
+          $hits = Select-String -Path ($files | Select-Object -ExpandProperty FullName) `
+            -Pattern 'sk-[A-Za-z0-9]{20,}', 'Bearer [A-Za-z0-9._\-]{20,}' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Line -notmatch 'FAKE|test-|示例|占位|abcdefghijkl' }
+          if ($hits) { $hits | ForEach-Object { Write-Error "疑似凭据: $($_.Path):$($_.LineNumber)" }; exit 1 }
+          Write-Output "未发现疑似凭据"
+
+  # 发布门禁：用**显式标识清单**扫工作树 + 全历史（refs + reflog）+ refs 之外的对象 + 署名。
+  # 期望结果 exit 0。变红 = 有真实命中 / 未批准标识 / 未登记署名 / 残留旧对象，
+  # 是「还不能发布」的信号，不是误报。内部资料登记在 tools/publish_excludes.txt
+  # （见 README「发布状态与内部资料」）。
+  release-scan:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # 全历史扫描
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: 标识清单必须存在且非空（fail closed）
+        shell: pwsh
+        run: |
+          $p = 'tools/release_identifiers.txt'
+          if (-not (Test-Path $p)) { Write-Error "缺少显式标识清单：$p"; exit 1 }
+          $entries = Get-Content $p | Where-Object { $_ -match '^(approved|pending-owner-confirmation)\|' }
+          if (-not $entries) { Write-Error "标识清单为空：$p"; exit 1 }
+          Write-Output "标识清单条目：$($entries.Count)"
+
+      - name: 发布扫描（工作树 + 全历史 + 作者元数据 + 显式标识清单）
+        run: python tools/scan_sensitive.py --identifiers tools/release_identifiers.txt --show 25

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wbrelay-gateway"
+version = "1.0.0"
+description = "多供应商自动路由网关：Codex 只连一个本地口，按模型名分流到多个上游，失败自动冷却切换"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "WBRelay contributors" }]
+keywords = ["codex", "gateway", "router", "openai", "proxy"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Win32 (MS Windows)",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.9",
+  "Topic :: Internet :: Proxy Servers",
+]
+
+[project.optional-dependencies]
+# 可选：只有需要独立窗口 / 系统托盘时才安装；缺失时降级为浏览器模式（HTTP 服务与看板不受影响）
+gui = ["pywebview>=4.0", "pystray>=0.19", "Pillow>=9.0"]
+
+# 说明：本仓库尚未确定公开主页，故不填 Homepage / Repository 等项目 URL
+# （既不填占位域名，也不编造真实地址）。
+
+[project.scripts]
+wbrelay = "wbrelay.app:main"
+
+# ---- 包发现 ----
+# 必须用 find 覆盖全部子包：早期只把顶层包列进 packages，
+# 导致 wbrelay.web / wbrelay.ides / wbrelay.integrations 不进 wheel。
+[tool.setuptools.packages.find]
+include = ["wbrelay*"]
+
+# ---- 静态资源 ----
+# dashboard.html 必须随包分发（安装版靠它提供看板页面）。
+# 包内副本由 tools/sync_dashboard.py 从仓库根生成，测试断言两者逐字节一致。
+[tool.setuptools.package-data]
+wbrelay = ["static/*.html"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
