@@ -24,8 +24,14 @@ r"""网关重启工具：停掉占用端口的 WBRelay 网关，然后立刻用�
 用法
     python tools/restart-gateway.py --check          # 只探测当前监听进程，不动它
     python tools/restart-gateway.py                  # 重启 8789 上的网关
+    python tools/restart-gateway.py --start          # 冷启动：端口无监听时从零拉起（升级换 EXE 用）
     python tools/restart-gateway.py --port 18789 --wait 60
     python tools/restart-gateway.py --cwd "<网关启动时的工作目录>"
+
+冷启动（--start，2026-10-14 新增，见 docs/方案-网关冷启动.md）
+    * 只在「端口无监听」时可用；已有监听一律拒绝，提示改用普通重启；
+    * 入口**写死**：<仓库>\dist\WBRelay.exe 优先，其次 <仓库>\relay.py —— 仍然没有 --cmd；
+    * 与重启共用「一次性交接文件 + 随机 token + 脱离会话的 worker + 就绪轮询」全套机制。
 """
 import argparse
 import datetime
@@ -380,6 +386,95 @@ def validate_start_argv(argv, cwd):
     return True, "", [str(a) for a in argv]
 
 
+def cold_start_argv():
+    """冷启动的固定入口：**不接受任何外部命令**。
+
+    优先打包版 `<仓库>\\dist\\WBRelay.exe`（升级换的就是它），其次源码入口
+    `<仓库>\\relay.py`（用当前解释器）。返回 (argv, cwd, reason)；reason 非空表示不可用。
+    """
+    exe = os.path.join(REPO_ROOT, "dist", "WBRelay.exe")
+    if os.path.isfile(exe):
+        return [exe], REPO_ROOT, ""
+    relay = os.path.join(REPO_ROOT, "relay.py")
+    if os.path.isfile(relay):
+        return [sys.executable, relay], REPO_ROOT, ""
+    return [], "", ("仓库内既没有 dist\\WBRelay.exe 也没有 relay.py，无法冷启动"
+                    "（先打包：pyinstaller WBRelay.spec）")
+
+
+def plan_cold_start(args, pids):
+    """冷启动规划：返回 (payload 或 None, 退出码)。
+
+    端口已有监听 → 拒绝（那不是冷启动）；`--check` 时只打印计划不派发。
+    """
+    if pids:
+        print("[退出] 端口 %d 已有监听 PID %s：这不是冷启动；请用普通重启（不带 --start）。"
+              % (args.port, pids))
+        return None, 2
+    argv, cwd, why = cold_start_argv()
+    if not argv:
+        print("[退出] %s" % why)
+        return None, 2
+    ok, why2, argv = validate_start_argv(argv, cwd)
+    if not ok:
+        print("[退出] 冷启动入口不合规：%s" % why2)
+        return None, 3
+    print("[计划] 冷启动命令行: %s" % " ".join('"%s"' % a if " " in a else a for a in argv))
+    print("[计划] 工作目录    : %s" % cwd)
+    print("[计划] 动作        : 拉起 → 等 /api/state 就绪（端口 %d）" % args.port)
+    if args.check:
+        print("[check] 仅探测，未做任何改动。")
+        return None, 0
+    return {
+        "mode": "start", "port": args.port, "cwd": cwd, "argv": argv,
+        "parent_pid": os.getpid(), "created_at": time.time(),
+        "argv_hash": hashlib.sha256(json.dumps(argv, ensure_ascii=False).encode("utf-8")).hexdigest(),
+    }, None
+
+
+def dispatch_worker(payload, args, cold=False):
+    """派发脱离会话的值守进程（重启 / 冷启动共用）。"""
+    token = secrets.token_hex(32)
+    payload["token"] = token
+    payload["wait"] = args.wait
+    log_path = os.path.join(temp_dir(), "wbrelay-restart-%s.log"
+                            % datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    path = handoff_path()
+    write_handoff(path, payload)
+    cmd = [sys.executable, os.path.abspath(__file__), "--worker",
+           "--handoff", path, "--token", token, "--log", log_path]
+    subprocess.Popen(cmd, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
+                     creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+                     close_fds=True)
+    print("[值守] 已派出值守进程，日志: %s" % log_path)
+    if cold:
+        print("[值守] 正在拉起网关（通常 2–8 秒），无需人工再启动。")
+    else:
+        print("[值守] 网关将短暂中断（通常 2–5 秒），无需人工再启动。")
+    return 0
+
+
+def start_and_wait(argv, cwd, port, wait, fh):
+    """启动 + 轮询 /api/state 就绪（重启 / 冷启动共用）。"""
+    try:
+        start_process(argv, cwd, fh)
+    except Exception as exc:
+        log_line(fh, "[worker] 失败：启动异常 %s" % exc)
+        return 7
+    deadline = time.time() + max(5, int(wait or 60))
+    state = None
+    while time.time() < deadline:
+        state = http_json(port, "/api/state")
+        if isinstance(state, dict) and "suppliers" in state:
+            break
+        time.sleep(0.5)
+    if not isinstance(state, dict) or "suppliers" not in state:
+        log_line(fh, "[worker] 失败：等待 /api/state 就绪超时，请查看该实例数据目录的 wb.log")
+        return 7
+    log_line(fh, "[worker] 就绪 ✅ 完成")
+    return 0
+
+
 def command_marker(argv, port):
     """同一实例后代的唯一标记：优先 --data-dir 值，其次端口。"""
     if "--data-dir" in argv:
@@ -525,7 +620,10 @@ def read_handoff(path, token):
     want = str(payload.get("token") or "")
     if not token or not want or not secrets.compare_digest(want, str(token)):
         return None, "交接 token 不匹配（外部直接调用 --worker？）"
-    for key in ("pid", "port", "identity", "argv", "cwd"):
+    # 必填字段按模式区分：冷启动（mode=start）没有旧进程，因此没有 pid / identity
+    mode = str(payload.get("mode") or "restart")
+    need = ("port", "argv", "cwd") if mode == "start" else ("pid", "port", "identity", "argv", "cwd")
+    for key in need:
         if key not in payload:
             return None, "交接文件缺少字段：%s" % key
     return payload, ""
@@ -581,9 +679,24 @@ def run_worker(args):
         if not ok:
             log_line(fh, "[worker] 拒绝：启动命令不合规：%s" % why)
             return 4
-        pid, port = int(payload["pid"]), int(payload["port"])
-        log_line(fh, "[worker] 目标: pid=%s port=%d cwd=%s" % (pid, port, payload.get("cwd")))
+        port = int(payload["port"])
         log_line(fh, "[worker] 启动命令: %s" % " ".join(argv))
+
+        if str(payload.get("mode") or "restart") == "start":
+            # 冷启动：没有旧进程可停；但 worker 起来时端口可能已被别的东西占上（竞态）
+            log_line(fh, "[worker] 模式: 冷启动（端口 %d）" % port)
+            listening = netstat_listeners(port)
+            if listening:
+                log_line(fh, "[worker] 拒绝：端口 %d 已被 PID %s 监听（竞态），不启动" % (port, listening))
+                return 5
+            if not consume_handoff(args.handoff):
+                log_line(fh, "[worker] 拒绝：交接文件已被消费或不可写（防重放）")
+                return 4
+            return start_and_wait(argv, payload.get("cwd") or None, port,
+                                  payload.get("wait"), fh)
+
+        pid = int(payload["pid"])
+        log_line(fh, "[worker] 目标: pid=%s port=%d cwd=%s" % (pid, port, payload.get("cwd")))
 
         verified, children, err = verify_target(payload, fh)
         if err:
@@ -621,23 +734,7 @@ def run_worker(args):
             return 6
 
         # 启动 + 等就绪
-        try:
-            start_process(argv, payload.get("cwd") or None, fh)
-        except Exception as exc:
-            log_line(fh, "[worker] 失败：启动异常 %s" % exc)
-            return 7
-        deadline = time.time() + max(5, int(payload.get("wait") or 60))
-        state = None
-        while time.time() < deadline:
-            state = http_json(port, "/api/state")
-            if isinstance(state, dict) and "suppliers" in state:
-                break
-            time.sleep(0.5)
-        if not isinstance(state, dict) or "suppliers" not in state:
-            log_line(fh, "[worker] 失败：等待 /api/state 就绪超时，请查看该实例数据目录的 wb.log")
-            return 7
-        log_line(fh, "[worker] 就绪 ✅ 完成")
-        return 0
+        return start_and_wait(argv, payload.get("cwd") or None, port, payload.get("wait"), fh)
     finally:
         try:
             fh.close()
@@ -652,6 +749,8 @@ def main(argv=None):
     ap.add_argument("--check", "--dry-run", action="store_true", dest="check",
                     help="只探测监听进程与启动方式，不做任何操作")
     ap.add_argument("--cwd", default="", help="显式指定工作目录（默认按旧进程脚本路径推断）")
+    ap.add_argument("--start", action="store_true",
+                    help="冷启动：端口没有网关时用写死入口（dist\\WBRelay.exe 或 relay.py）拉起并等就绪")
     ap.add_argument("--wait", type=int, default=60, help="就绪等待上限（秒）")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--handoff", default="", help=argparse.SUPPRESS)
@@ -669,8 +768,14 @@ def main(argv=None):
 
     pids = netstat_listeners(args.port)
     print("[探测] 端口 %d 监听 PID: %s" % (args.port, pids or "（无）"))
+    if args.start:
+        payload, rc = plan_cold_start(args, pids)
+        if payload is None:
+            return rc
+        return dispatch_worker(payload, args, cold=True)
     if not pids:
-        print("[退出] 没有进程监听该端口；本工具只做「重启」，不做「冷启动」。")
+        print("[退出] 没有进程监听该端口；本工具只做「重启」。")
+        print("       如果是要冷启动（例如升级后第一次拉起），请加 --start。")
         return 2
     if len(pids) != 1:
         print("[退出] 端口 %d 有多个监听 PID %s：无法确定目标，拒绝操作。" % (args.port, pids))
@@ -718,25 +823,13 @@ def main(argv=None):
         print("[check] 仅探测，未做任何改动。")
         return 0
 
-    token = secrets.token_hex(32)
-    log_path = os.path.join(temp_dir(), "wbrelay-restart-%s.log"
-                            % datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-    path = handoff_path()
     payload = {
-        "token": token, "pid": pid, "port": args.port, "cwd": cwd, "argv": argv,
+        "mode": "restart", "pid": pid, "port": args.port, "cwd": cwd, "argv": argv,
         "identity": snap, "marker": marker,
         "parent_pid": os.getpid(), "created_at": time.time(),
         "argv_hash": hashlib.sha256(json.dumps(argv, ensure_ascii=False).encode("utf-8")).hexdigest(),
     }
-    write_handoff(path, payload)
-    cmd = [sys.executable, os.path.abspath(__file__), "--worker",
-           "--handoff", path, "--token", token, "--log", log_path]
-    subprocess.Popen(cmd, cwd=REPO_ROOT, stdin=subprocess.DEVNULL,
-                     creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-                     close_fds=True)
-    print("[值守] 已派出值守进程，日志: %s" % log_path)
-    print("[值守] 网关将短暂中断（通常 2–5 秒），无需人工再启动。")
-    return 0
+    return dispatch_worker(payload, args, cold=False)
 
 
 if __name__ == "__main__":

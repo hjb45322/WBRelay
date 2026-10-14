@@ -14,6 +14,12 @@
   G8  只凭端口或 basename 不能通过身份识别
   G9  静态审计：源码里没有 taskkill /T、没有 --force/--cmd/--move
   G10 进程信息解码：非 ASCII 路径（本仓库路径含中文）往返后逐字符一致 —— 只读，不碰任何进程
+  G11 冷启动：端口已有监听 → 拒绝(2) 且不派发值守进程
+  G12 冷启动：端口无监听 → payload.mode=start，入口来自写死白名单，cwd=仓库根
+  G13 冷启动 worker：不结束任何进程，只启动一次，就绪即 0
+  G14 冷启动竞态：worker 起来时端口已被监听 → 拒绝(5)，不启动
+  G15 静态审计：仍无 --force/--cmd/--move；--start 不接受命令/位置参数
+  G16 start.bat 指向 dist\WBRelay.exe（防死链回归）
 
 用法：python tests/test_restart_gateway.py
 """
@@ -55,7 +61,7 @@ def proc(pid, parent, exe, cmd, created="20261012000000.000000+480"):
 
 def ns(**kw):
     base = {"worker": False, "handoff": "", "token": "", "log": "",
-            "port": 19999, "check": True, "cwd": "", "wait": 5}
+            "port": 19999, "check": True, "cwd": "", "wait": 5, "start": False}
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -196,6 +202,100 @@ def main():
         rc = mod.run_worker(ns(worker=True, handoff=good3, token=token,
                                log=os.path.join(tmp, "w8.log")))
         check("G2 交接文件不可重放 → 拒绝(4)", rc == 4, "rc=%s" % rc)
+
+        # ---- G11–G16 冷启动（--start）：升级换 EXE 的唯一合规路径 ----
+        disp = []
+
+        def fake_popen(cmd, **kw):
+            disp.append(([str(c) for c in cmd], kw))
+            return None
+
+        saved_popen = mod.subprocess.Popen   # 注意别用 real_popen：那是本测试文件后面恢复用的原名
+        mod.subprocess.Popen = fake_popen
+        try:
+            # G11 端口已有监听 → 拒绝且不派发
+            mod.netstat_listeners = lambda port: [1234]
+            disp[:] = []
+            rc = mod.main(["--start", "--port", "19999"])
+            check("G11 端口已有监听时 --start 拒绝(2)且不派发值守进程",
+                  rc == 2 and disp == [], "rc=%s disp=%d" % (rc, len(disp)))
+
+            # G12 端口无监听 → plan_cold_start 的 payload 正确
+            mod.netstat_listeners = lambda port: []
+            mod.proc_info = lambda pid: None
+            disp[:] = []
+            rc = mod.main(["--start", "--port", "19999"])
+            pl, err = None, "未派发"
+            if disp:
+                cmdline = disp[0][0]
+                hop = cmdline[cmdline.index("--handoff") + 1]
+                tok = cmdline[cmdline.index("--token") + 1]
+                pl, err = mod.read_handoff(hop, tok)
+            check("G12 无监听时 --start 派发值守进程且 exit=0",
+                  rc == 0 and pl is not None, "rc=%s err=%s" % (rc, err))
+            check("G12 payload.mode == start",
+                  (pl or {}).get("mode") == "start", repr((pl or {}).get("mode")))
+            ok_argv, why_argv, _n = mod.validate_start_argv((pl or {}).get("argv") or [],
+                                                           (pl or {}).get("cwd") or "")
+            check("G12 入口来自写死白名单（仍无 --cmd）", ok_argv, why_argv)
+            check("G12 cwd == 仓库根",
+                  os.path.normcase((pl or {}).get("cwd") or "") == os.path.normcase(REPO),
+                  repr((pl or {}).get("cwd")))
+            cold_payload = pl
+        finally:
+            mod.subprocess.Popen = saved_popen
+
+        # G13 冷启动 worker：不结束任何进程，只启动一次，就绪即 0
+        killed, started = [], []
+        cold_path = os.path.join(tmp, "handoff-cold.json")
+        mod.write_handoff(cold_path, dict(cold_payload or {}, token=token))
+        mod.kill_pid = lambda pid, fh: killed.append(pid)
+        mod.start_process = lambda argv, cwd, fh: started.append((list(argv), cwd))
+        mod.netstat_listeners = lambda port: []
+        mod.http_json = lambda port, path, timeout=3: dict(state_ok)
+        mod.time.sleep = lambda *_a: None
+        rc = mod.run_worker(ns(worker=True, handoff=cold_path, token=token,
+                               log=os.path.join(tmp, "w-cold.log")))
+        check("G13 冷启动 worker 返回 0", rc == 0, "rc=%s" % rc)
+        check("G13 冷启动不结束任何进程", killed == [], repr(killed))
+        check("G13 只启动一次且入口合规",
+              len(started) == 1 and mod.validate_start_argv(started[0][0], started[0][1])[0],
+              repr(started[:1]))
+        check("G13 就绪判据是 /api/state 含 suppliers（与重启模式一致）",
+              isinstance(state_ok, dict) and "suppliers" in state_ok)
+
+        # G14 竞态：worker 起来时端口已被监听 → 拒绝(5)，不启动
+        killed, started = [], []
+        mod.write_handoff(cold_path, dict(cold_payload or {}, token=token))
+        mod.netstat_listeners = lambda port: [4321]
+        rc = mod.run_worker(ns(worker=True, handoff=cold_path, token=token,
+                               log=os.path.join(tmp, "w-cold-race.log")))
+        check("G14 冷启动竞态（端口已被监听）→ 拒绝(5) 且不启动",
+              rc == 5 and started == [], "rc=%s started=%d" % (rc, len(started)))
+
+        # G15 静态审计：旧能力仍不存在；--start 不接受命令/位置参数
+        src = io.open(os.path.join(REPO, "tools", "restart-gateway.py"), encoding="utf-8").read()
+        check("G15a 源码里仍无 --cmd / --force / --move",
+              all(("add_argument(\"%s\"" % f) not in src for f in ("--cmd", "--force", "--move")))
+        raised = False
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            mod.main(["--start", "C:\\Windows\\System32\\calc.exe"])
+        except SystemExit:
+            raised = True
+        finally:
+            sys.stderr = old_stderr
+        check("G15b --start 不接受命令参数（位置参数被 argparse 拒绝）", raised)
+
+        # G16 start.bat 指向 dist\WBRelay.exe（防死链回归）
+        bat = io.open(os.path.join(REPO, "start.bat"), encoding="utf-8", errors="replace").read()
+        check("G16a start.bat 指向 dist\\WBRelay.exe",
+              "dist\\WBRelay.exe" in bat, repr(bat[:80]))
+        check("G16b start.bat 不再指向仓库根的裸 WBRelay.exe",
+              'dp0WBRelay.exe' not in bat)
+        check("G16c start.bat 在缺文件时给出提示而不是静默失败",
+              "if not exist" in bat and "pyinstaller" in bat)
 
         # ---- G6 启动命令白名单 ----
         cases = [

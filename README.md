@@ -353,6 +353,20 @@ python tools/restart-gateway.py --port 18789   # 指定端口
 
 ---
 
+### 冷启动（升级换 EXE 后用）
+
+端口上**没有**网关时（例如刚换完 `dist\WBRelay.exe`），用值守进程从零拉起：
+
+```powershell
+python tools/restart-gateway.py --start        # 端口无监听时自动选 dist\WBRelay.exe（其次 relay.py）
+python tools/restart-gateway.py --start --check   # 只看计划，不启动
+```
+
+入口是**写死的**（仍无 `--cmd`）；端口已有监听时会拒绝并提示改用普通重启 —— 这条路径存在的意义是：
+升级必须「退出 → 换文件 → 启动」，而手工启动属于被禁用的绕过方式。
+
+---
+
 ## 资产许可
 
 `assets/` 下的图标是**代码生成的几何图形，无第三方素材**：
