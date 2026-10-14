@@ -36,6 +36,13 @@
 - `.gitignore`：删掉一行旧命名的本地临时目录忽略规则（仓库里没有该目录，`git grep` 全仓库
   只此一处命中）；其余规则与 CRLF 逐字节不变。
 
+- **CI 补齐 6 个「写了但从不执行」的测试**：`test_settings_concurrency` /
+  `test_usage_cache_concurrency` / `test_log_rotation` / `test_http_error_handling` /
+  `test_dsh_inject` / `test_ide_takeover` 此前只列在 `CONTRIBUTING.md` 的**手工自检清单**里，
+  `ci.yml` 没有对应步骤 —— 它们对应的修复（并发丢更新 / 日志轮转 / HTTP 异常收敛 /
+  DSH 与 IDE 接管）一旦回归，CI 不会变红。现接入 `windows` job：本地实测 6 个全绿
+  （58 / 31 / 21 / 26 条断言 + 2 个 unittest 脚本），新增耗时约 22s。
+  该改动**只动 CI 配置，未改动任何产品代码**。
 - **历史重写 + 强推（2026-10-14，所有者决定）**：那一行原本在**每个**旧提交里，且已随
   v1.0.0 / v1.0.1 公开过。做法：`git filter-branch --tree-filter`（把该行从每个提交的
   `.gitignore` 中删掉）+ `--tag-name-filter cat`（重建两个标签，tagger 与说明原样保留），

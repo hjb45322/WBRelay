@@ -56,6 +56,15 @@ jobs:
           python tests/test_supplier_label.py
           python tests/test_atomic_writes.py
 
+      - name: 并发 / 日志轮转 / IDE 接管 / HTTP 异常收敛（此前只在手工自检清单里）   # 2026-10-14 补入门禁
+        run: |
+          python tests/test_settings_concurrency.py
+          python tests/test_usage_cache_concurrency.py
+          python tests/test_log_rotation.py
+          python tests/test_http_error_handling.py
+          python tests/test_dsh_inject.py
+          python tests/test_ide_takeover.py
+
       - name: 只读零写入
         run: python tests/test_readonly_zero_write.py
 
