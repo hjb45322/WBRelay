@@ -9,7 +9,7 @@ Codex ──► WBRelay（一个本地口） ──► 上游供应商 A（优�
                                  └─► 上游供应商 C（B 失败时）
 ```
 
-> 状态：**1.0.1**，已公开发布（MIT）。架构与打包仍在演进；
+> 状态：**1.0.2**，已公开发布（MIT）。架构与打包仍在演进；
 > 内部资料与发布门禁见本文末尾「发布状态与内部资料」。
 
 ---
@@ -136,6 +136,10 @@ docs/                 计划与设计文档
 pyinstaller WBRelay.spec
 # 等价命令：pyinstaller --onefile --noconsole --name WBRelay --add-data "dashboard.html;." relay.py
 ```
+
+打包定义会从 `wbrelay/__init__.py` 的 `__version__` **生成** EXE 的版本资源
+（「属性 → 详细信息」里的 ProductName / FileVersion 等）——版本号仍是单一来源，不需要手改第二处。
+分发 EXE 时请随附 `LICENSE` 与 `THIRD-PARTY-NOTICES.md`（EXE 内含 CPython 与 GUI 依赖）。
 
 ### 构建 wheel（发布安装版）
 
@@ -456,3 +460,7 @@ fail closed（退出码 2）；命中只输出类型、路径、行号、计数�
 ## 许可
 
 MIT，见 `LICENSE`。
+
+打包后的 `WBRelay.exe` 是 PyInstaller 单文件包，**还内含** CPython、PyInstaller、Pillow、
+pywebview 与 pystray（LGPLv3）——各自的许可、版权与替代方案见 `THIRD-PARTY-NOTICES.md`。
+从源码安装（`pip install .` / `pip install ".[gui]"`）时这些依赖由使用者自行安装，按各自的许可使用。

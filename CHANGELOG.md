@@ -2,6 +2,23 @@
 
 本文件记录面向使用者的变更。
 
+## 1.0.2 — 2026-10-14 EXE 版本资源 + 第三方许可声明
+
+### 变更
+
+- **`WBRelay.exe` 补上版本资源（体验）**：此前它的「属性 → 详细信息」全为空
+  （`CompanyName` / `ProductName` / `FileVersion` / `FileDescription` 一个都没有），
+  加上没有数字签名，Windows 便把它与「来路不明的程序」归为一类。修法：`WBRelay.spec`
+  在打包时从 `wbrelay/__init__.py` 的 `__version__` **生成**版本资源并交给 `EXE(version=…)`
+  —— 版本号保持单一来源，不需要在两处手改。**未做**：数字签名（需要 CA 证书，另议）。
+
+- **新增 `THIRD-PARTY-NOTICES.md`（合规）**：`WBRelay.exe` 内含 CPython（PSF）、
+  PyInstaller（GPLv2+ 带例外）、Pillow（MIT-CMU）、pywebview（BSD-3）、**pystray（LGPLv3）**。
+  此前仓库只有一份 MIT `LICENSE`、没有任何第三方声明。现补一份声明文件，并写明
+  「源码运行不涉及该文件」「需要更严格合规可打无 GUI 版本」。
+
+- **Release 附件约定**：发布时随附 `WBRelay-<版本>.exe` + `LICENSE` + `THIRD-PARTY-NOTICES.md`。
+
 ## 未发布 — 发布门禁加固（无扩展名文本 + 标识大小写）
 
 ### 修复
