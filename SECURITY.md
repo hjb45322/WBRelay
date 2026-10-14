@@ -34,6 +34,10 @@ WBRelay 是一个**本机单用户**的 LLM 路由网关：默认只监听 `127.
   Cookie / Authorization / Referer / Origin 一律不转发；请求体 1MB、响应体 8MB 上限（先拒后读，
   不整体读进内存）；15s 超时 + 句柄一定关闭；失败一律脱敏后的 502（详见第五节）
 - 管理接口可选 `require_admin_token`（`X-Admin-Token`），开启后 `/api/*` 需要令牌
+- **出站请求只有一条**（2026-10-14 起）：看板「检查更新」按钮触发的一次只读查询
+  （`/api/update`，5s 超时、64 KiB 上限）。**默认不自动联网**，不传任何本机信息
+  （无版本号 / 路径 / 供应商 / 用量 / Key），不下载也不改文件；可用
+  `settings.json` 的 `update_check = off` 或环境变量 `WBRELAY_NO_UPDATE_CHECK=1` 彻底关闭
 
 ### 2) 本机敏感数据
 - `/api/clipboard` 读系统剪贴板文本，仅同源页面可调用；**内容不写日志**

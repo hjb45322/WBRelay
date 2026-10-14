@@ -65,6 +65,9 @@ jobs:
           python tests/test_dsh_inject.py
           python tests/test_ide_takeover.py
 
+      - name: 版本更新检测（全离线：默认零外联 / 失败静默降级）
+        run: python tests/test_update_check.py
+
       - name: 只读零写入
         run: python tests/test_readonly_zero_write.py
 

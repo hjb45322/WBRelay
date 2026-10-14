@@ -110,7 +110,10 @@ PATTERNS = (
 )
 ALLOWED_HOSTS = {"127.0.0.1", "localhost", "www.w3.org", "w3.org", "openrouter.ai",
                  "pypi.org", "github.com", "raw.githubusercontent.com",
-                 "docs.python.org", "schema.org", "json-schema.org"}
+                 "docs.python.org", "schema.org", "json-schema.org",
+                 # 版本更新检测的只读端点（2026-10-14 加入）：与 github.com 同源的公开 API，
+                 # 产品代码里必须写全 URL，不是泄漏；见 docs/方案-版本更新检测.md
+                 "api.github.com"}
 # 保留域名后缀（RFC 2606 / 测试用），一律不算泄漏
 RESERVED_SUFFIX = (".example", ".invalid", ".test", ".localhost", ".example.com",
                    ".local", ".internal", ".w3.org")

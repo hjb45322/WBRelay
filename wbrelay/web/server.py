@@ -10,6 +10,7 @@ from ..settings import admin_token_ok, auth_key_ok
 
 from .api_admin import ApiAdminMixin
 from .api_state import ApiStateMixin
+from .api_update import ApiUpdateMixin
 from .api_upstream import ApiUpstreamMixin
 from .api_usage import ApiUsageMixin
 from .api_v1 import ApiV1Mixin
@@ -24,6 +25,7 @@ V1_PATHS = V1_MODELS_PATHS + V1_CHAT_PATHS + V1_INDEX_PATHS
 
 
 class Handler(ApiV1Mixin, ApiUpstreamMixin, ApiUsageMixin, ApiAdminMixin,
+               ApiUpdateMixin,
               ApiStateMixin, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -170,6 +172,9 @@ class Handler(ApiV1Mixin, ApiUpstreamMixin, ApiUsageMixin, ApiAdminMixin,
             return self._api_key_current()
         if path == "/api/state":
             return self._api_state()
+        if path == "/api/update":
+            # 版本更新检测：只读、默认只有用户点按钮才走到这里（见 docs/方案-版本更新检测.md）
+            return self._api_update()
         if path == "/api/ides":
             return self._api_ides()
         if path == "/api/models":

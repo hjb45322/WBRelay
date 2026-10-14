@@ -620,6 +620,15 @@
               <div class="meta"><div class="t">界面主题</div><div class="d">看板界面主题，跟随系统时自动切换深浅色</div></div>
               <div class="ctl"><select id="set-theme"><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></div>
             </div>
+            <div class="set-row">
+              <div class="meta"><div class="t">版本更新</div><div class="d">点按钮才查询一次（网关不会主动联网）；只读最新版本号，不下载、不安装、不改文件</div></div>
+              <div class="ctl grow">
+                <div class="set-inline">
+                  <span id="set-update-result" class="hint">点右侧按钮检查一次</span>
+                  <button id="btn-check-update" style="white-space:nowrap">检查更新</button>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="set-card" id="sec-upstream">
@@ -2277,6 +2286,38 @@ el("btn-save-settings").addEventListener("click", function(){
       if(res.json.port_changed) el("set-port").value = res.json.port;
       settingsSetState(false);
     } else toast((res.json.error||{}).message || "保存失败", true);
+  });
+});
+function showUpdateResult(j){
+  var box = el("set-update-result");
+  if(!box) return;
+  if(!j){ box.textContent = "检查失败"; return; }
+  if(j.has_update){
+    box.textContent = "发现新版本 " + (j.latest || "") + "（当前 " + (j.current || "") + "）";
+    if(j.url){
+      var a = document.createElement("a");
+      a.href = j.url; a.target = "_blank"; a.rel = "noreferrer";
+      a.textContent = " 打开发布页"; a.style.marginLeft = "6px";
+      box.appendChild(a);
+    }
+  } else if(j.error){
+    box.textContent = j.error;
+  } else if(j.latest){
+    box.textContent = "已是最新（当前 " + (j.current || "") + "）";
+  } else {
+    box.textContent = "未获取到版本信息";
+  }
+}
+el("btn-check-update").addEventListener("click", function(){
+  var b = el("btn-check-update");
+  b.disabled = true;
+  el("set-update-result").textContent = "正在检查…（最多 5 秒）";
+  api("/api/update").then(function(res){
+    b.disabled = false;
+    showUpdateResult(res.status === 200 ? res.json : {error: "检查失败（HTTP " + res.status + "）"});
+  }).catch(function(){
+    b.disabled = false;
+    showUpdateResult({error: "检查失败（网络不可用）"});
   });
 });
 el("btn-copy-admin-token").addEventListener("click", function(){
