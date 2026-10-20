@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """网络层：系统代理探测、带代理回退的 urlopen、OpenRouter 档案同步。"""
+import atexit
+import http.client
 import http.cookiejar
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 import winreg
 
 from .state import _lock
 from .log import _log
 from .redact import redact
 from .settings import load_settings
+from .localpool import (ACQUIRE_WAIT, LocalConnectError, LocalReadyPool,
+                         PooledHTTPResponse)
 from . import profiles
 
 _wb_cookiejar = None  # 全局上游服务代理 cookie jar，保持登录态
@@ -101,6 +107,153 @@ def _urlopen(req, timeout):
             except Exception as exc:
                 _log("[WBRelay] 系统代理 %s 请求 %s 失败，回退直连: %s" % (prx, host, exc))
     return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _local_origin(url):
+    """返回本地上游的 (scheme, host, port)，非本地/非法 URL 返回 None。"""
+    try:
+        parts = urlsplit(str(url or ""))
+        scheme = (parts.scheme or "").lower()
+        host = (parts.hostname or "").lower()
+        if scheme not in ("http", "https"):
+            return None
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return None
+        port = parts.port or (443 if scheme == "https" else 80)
+        return scheme, host, int(port)
+    except (TypeError, ValueError):
+        return None
+
+
+_LOCAL_POOLS = {}
+_LOCAL_POOL_ORIGINS = set()
+_LOCAL_POOLS_LOCK = threading.Lock()
+
+
+def _make_local_connector(origin):
+    scheme, host, port = origin
+
+    def connect(timeout):
+        cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
+        conn = cls(host, port, timeout=timeout)
+        conn.connect()
+        return conn
+
+    return connect
+
+
+def _local_pool(origin):
+    with _LOCAL_POOLS_LOCK:
+        pool = _LOCAL_POOLS.get(origin)
+        if pool is None:
+            pool = LocalReadyPool(
+                _make_local_connector(origin),
+                name="%s://%s:%d" % origin,
+            )
+            _LOCAL_POOLS[origin] = pool
+        return pool
+
+
+def _mark_local_poolable(origin, headers):
+    """只有已知支持并发 idle 连接的本地上游才启用 ready 队列。
+
+    单线程 HTTPServer 会在第一个 idle TCP 连接上阻塞；无条件预热会把它饿死。
+    支持并发的本地上游会明确发送 ``Server: wb-proxy/...``，因此以该能力标记作为
+    开关；未知本地服务继续走原来的 _urlopen 路径。
+    """
+    try:
+        server = str(headers.get("Server") or "").lower()
+    except Exception:
+        server = ""
+    if "wb-proxy" not in server:
+        return False
+    with _LOCAL_POOLS_LOCK:
+        _LOCAL_POOL_ORIGINS.add(origin)
+    # 探测成功就立即开始预热；不能等下一次请求才创建队列，否则
+    # “探测后到下一请求前”的空窗仍然没有 ready 连接可用。
+    try:
+        _local_pool(origin)
+    except Exception:
+        # 预热线程创建失败不应影响本次已经成功的上游请求；下一次
+        # 请求会重新尝试创建队列。
+        pass
+    return True
+
+
+def _close_local_pools():
+    with _LOCAL_POOLS_LOCK:
+        pools = list(_LOCAL_POOLS.values())
+        _LOCAL_POOLS.clear()
+        _LOCAL_POOL_ORIGINS.clear()
+    for pool in pools:
+        try:
+            pool.close()
+        except Exception:
+            pass
+
+
+atexit.register(_close_local_pools)
+
+
+def _open_local_request(req, timeout, origin):
+    """走本地上游 ready 队列，返回 PooledHTTPResponse。"""
+    parts = urlsplit(req.full_url)
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    pool = _local_pool(origin)
+    try:
+        conn = pool.acquire(min(float(timeout), ACQUIRE_WAIT))
+    except LocalConnectError:
+        raise
+    except Exception as exc:
+        raise LocalConnectError("本地 ready 队列不可用", reason=exc) from exc
+
+    try:
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            sock.settimeout(float(timeout))
+        headers = dict(req.header_items())
+        # one-shot：响应结束就关闭，后台补新连接；避免依赖上游 keep-alive。
+        headers["Connection"] = "close"
+        conn.request(req.get_method(), path, body=req.data, headers=headers)
+        resp = conn.getresponse()
+        wrapped = PooledHTTPResponse(resp, conn, pool)
+        if getattr(resp, "status", 0) >= 400:
+            err = urllib.error.HTTPError(
+                req.full_url, resp.status, resp.reason, resp.headers, wrapped)
+            err.wbrelay_body_bytes = len(req.data or b"")
+            raise err
+        return wrapped
+    except urllib.error.HTTPError:
+        raise
+    except Exception:
+        pool.release(conn)
+        raise
+
+
+def open_upstream_request(req, timeout):
+    """按目标主机选择本地上游 ready 队列或原 urllib 路径。
+
+    ``127.0.0.1`` / ``localhost`` / ``::1`` 的模型请求走预热连接；其他
+    供应商、模型目录和面板代理继续沿用 ``_urlopen`` 的系统代理回退语义。
+    """
+    origin = _local_origin(req.full_url)
+    if origin is None:
+        return _urlopen(req, timeout)
+    with _LOCAL_POOLS_LOCK:
+        poolable = origin in _LOCAL_POOL_ORIGINS
+    if poolable:
+        return _open_local_request(req, timeout, origin)
+    # 第一次本地请求先走正常 urllib，既保持单线程本地服务兼容，也读取
+    # Server 头确认上游是否支持并发 idle 连接。
+    try:
+        resp = _urlopen(req, timeout)
+    except urllib.error.HTTPError as exc:
+        _mark_local_poolable(origin, getattr(exc, "headers", {}))
+        raise
+    _mark_local_poolable(origin, getattr(resp, "headers", {}))
+    return resp
 
 
 def fetch_openrouter_profiles(force=False):

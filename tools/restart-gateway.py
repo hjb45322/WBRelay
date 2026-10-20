@@ -17,14 +17,16 @@ r"""网关重启工具：停掉占用端口的 WBRelay 网关，然后立刻用�
       防 PID 重用）/ 目标端口监听 + /api/state；核验与执行之间身份变了就停止。
     * 只逐个结束「已确认归 WBRelay 所有」的进程（`taskkill /PID <pid>`，**不带 /T**）；
       出现任何不明后代就停止并报告，绝不无差别结束后代。
-    * 启动命令只允许「本仓库 relay.py 的 Python 解释器入口」或「本仓库内的 WBRelay.exe」。
+    * 启动命令只允许「本仓库 relay.py 的 Python 解释器入口」或「本仓库内的
+      WBRelay.exe / WBRelay-<版本>.exe」（后者是 Release 常用的带版本副本）。
     * 不做通用文件搬运（历史上那个任意路径的 --move 已删除）。
     * 不写仓库内任何文件；日志固定落在 %TEMP%\wbrelay-restart-<时间戳>.log。
 
 用法
     python tools/restart-gateway.py --check          # 只探测当前监听进程，不动它
     python tools/restart-gateway.py                  # 重启 8789 上的网关
-    python tools/restart-gateway.py --start          # 冷启动：端口无监听时从零拉起（升级换 EXE 用）
+    python tools/restart-gateway.py --start          # 冷启动：端口无监听时从零拉起
+    python tools/restart-gateway.py --upgrade        # 升级重启：停旧后拉起 dist\WBRelay.exe
     python tools/restart-gateway.py --port 18789 --wait 60
     python tools/restart-gateway.py --cwd "<网关启动时的工作目录>"
 
@@ -32,12 +34,19 @@ r"""网关重启工具：停掉占用端口的 WBRelay 网关，然后立刻用�
     * 只在「端口无监听」时可用；已有监听一律拒绝，提示改用普通重启；
     * 入口**写死**：<仓库>\dist\WBRelay.exe 优先，其次 <仓库>\relay.py —— 仍然没有 --cmd；
     * 与重启共用「一次性交接文件 + 随机 token + 脱离会话的 worker + 就绪轮询」全套机制。
+
+升级重启（--upgrade）
+    * 端口上必须已有本项目网关；先走与普通重启相同的身份 / 后代核验；
+    * 停旧后启动写死入口 `dist\WBRelay.exe`（不存在时回退 relay.py），
+      并保留旧命令行的业务参数；仍不接受任意 --cmd / --force；
+    * 用于替换版本后缀 EXE：运行中的旧文件不能覆写，必须先停旧再起新入口。
 """
 import argparse
 import datetime
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -63,6 +72,16 @@ CREATE_NO_WINDOW = 0x08000000
 HANDOFF_TTL_SEC = 180
 INTERPRETER_BASENAMES = ("python.exe", "pythonw.exe", "py.exe")
 FROZEN_EXE_BASENAME = "wbrelay.exe"
+# 打包产物既可能是规范名 WBRelay.exe，也可能是带版本后缀的副本（Release 上传常用
+# WBRelay-1.1.0.exe）。两者逐字节一致；只认规范名会让「用后缀副本启动的在用实例」
+# 整条 R7 重启路径失效（2026-10-17 实测）。放宽的**只有文件名**这一层：
+# 仓库目录前缀、/api/state 协议、端口监听、worker 二次身份复核全部不变。
+FROZEN_EXE_RE = re.compile(r"^wbrelay(?:-\d[0-9a-z.\-]*)?\.exe$")
+
+
+def is_frozen_exe_name(name):
+    """是否为可接受的 WBRelay 冻结入口文件名（WBRelay.exe / WBRelay-<数字版本>.exe）。"""
+    return bool(FROZEN_EXE_RE.match(str(name or "").lower()))
 # 只有这些后代类型可以被认定为「归 WBRelay 所有」（核验规则见 classify_owned_child）
 WEBVIEW_BASENAMES = ("msedgewebview2.exe",)
 
@@ -286,12 +305,12 @@ def classify_wbrelay(info, state, port):
     if "suppliers" not in state or not isinstance(state.get("version"), str) or not state.get("version"):
         return False, "/api/state 缺少 suppliers/version：不是本项目的状态协议"
 
-    if base == FROZEN_EXE_BASENAME:
+    if is_frozen_exe_name(base):
         if not norm(exe).startswith(norm(REPO_ROOT) + os.sep):
-            return False, "WBRelay.exe 不在本仓库目录内，拒绝重启"
+            return False, "%s 不在本仓库目录内，拒绝重启" % base
         # 端口证据来自 /api/state（state.port == 目标端口）+ 该 PID 正在监听该端口，
         # 不要求命令行里出现 --port（在用实例可能是无参数启动、端口来自 settings）。
-        return True, "冻结 WBRelay.exe（仓库内）+ /api/state 协议一致"
+        return True, "冻结 %s（仓库内）+ /api/state 协议一致" % base
 
     if base in INTERPRETER_BASENAMES:
         argv, err = _split_or_error(cmd)
@@ -362,14 +381,15 @@ def validate_start_argv(argv, cwd):
             return False, "只允许本仓库 relay.py 作为 Python 入口：%s" % cand, []
         if not os.path.isfile(cand):
             return False, "入口文件不存在：%s" % cand, []
-    elif base == FROZEN_EXE_BASENAME:
+    elif is_frozen_exe_name(base):
         cand = prog if os.path.isabs(prog) else os.path.join(cwd, prog)
         if not os.path.isfile(cand):
-            return False, "WBRelay.exe 不存在：%s" % cand, []
+            return False, "%s 不存在：%s" % (base, cand), []
         if not norm(cand).startswith(norm(REPO_ROOT) + os.sep):
-            return False, "WBRelay.exe 必须位于本仓库目录内：%s" % cand, []
+            return False, "%s 必须位于本仓库目录内：%s" % (base, cand), []
     else:
-        return False, "启动命令不是 WBRelay 入口（只允许 relay.py 解释器入口或仓库内 WBRelay.exe）", []
+        return False, ("启动命令不是 WBRelay 入口（只允许 relay.py 解释器入口或仓库内 "
+                       "WBRelay.exe / WBRelay-<版本>.exe）"), []
     joined = " ".join(argv)
     low = joined.lower()
     if "--allow-legacy-data" in low:
@@ -400,6 +420,49 @@ def cold_start_argv():
         return [sys.executable, relay], REPO_ROOT, ""
     return [], "", ("仓库内既没有 dist\\WBRelay.exe 也没有 relay.py，无法冷启动"
                     "（先打包：pyinstaller WBRelay.spec）")
+
+
+def upgrade_start_argv(old_argv):
+    """升级重启的启动命令：换成写死入口，保留旧实例业务参数。
+
+    运行中的 EXE 在 Windows 上无法原地覆写，因此升级必须先停旧进程；该模式仍
+    由同一值守进程完成「核验 → 停旧 → 起新 → 等就绪」。
+    """
+    base_argv, cwd, why = cold_start_argv()
+    if not base_argv:
+        return [], "", why
+    old_argv = [str(a) for a in (old_argv or [])]
+    if not old_argv:
+        return [], "", "旧命令行解析为空，无法保留运行参数"
+
+    first = os.path.basename(old_argv[0]).lower()
+    if first in INTERPRETER_BASENAMES:
+        ok, why, script = _find_relay_entry(old_argv)
+        if not ok:
+            return [], "", why
+        try:
+            tail = old_argv[old_argv.index(script) + 1:]
+        except ValueError:
+            return [], "", "旧命令行里找不到 relay.py 入口"
+    elif is_frozen_exe_name(first):
+        tail = old_argv[1:]
+    else:
+        return [], "", "旧命令行入口不是 WBRelay 或本仓库 relay.py"
+
+    # 新入口从仓库根启动；相对 --data-dir 会改变含义，升级模式只接受绝对路径。
+    if "--data-dir" in tail:
+        try:
+            data_dir = tail[tail.index("--data-dir") + 1]
+        except IndexError:
+            return [], "", "旧命令行的 --data-dir 缺少路径"
+        if not os.path.isabs(data_dir):
+            return [], "", "升级重启要求 --data-dir 使用绝对路径，避免 cwd 变化改变数据目录"
+
+    argv = list(base_argv) + tail
+    ok, why, argv = validate_start_argv(argv, cwd)
+    if not ok:
+        return [], "", why
+    return argv, cwd, ""
 
 
 def plan_cold_start(args, pids):
@@ -449,6 +512,8 @@ def dispatch_worker(payload, args, cold=False):
     print("[值守] 已派出值守进程，日志: %s" % log_path)
     if cold:
         print("[值守] 正在拉起网关（通常 2–8 秒），无需人工再启动。")
+    elif str(payload.get("mode") or "restart") == "upgrade":
+        print("[值守] 将停止旧实例并拉起新入口（通常 2–8 秒），无需人工再启动。")
     else:
         print("[值守] 网关将短暂中断（通常 2–5 秒），无需人工再启动。")
     return 0
@@ -548,7 +613,7 @@ def classify_owned_child(child, parent_identity, marker):
     exe = child.get("ExecutablePath") or ""
     cmd = child.get("CommandLine") or ""
     base = os.path.basename(exe).lower()
-    if base == FROZEN_EXE_BASENAME and norm(exe) == parent_identity.get("exe"):
+    if is_frozen_exe_name(base) and norm(exe) == parent_identity.get("exe"):
         return True, "onefile 子进程：可执行文件与目标完全一致"
     if base in INTERPRETER_BASENAMES:
         argv, err = _split_or_error(cmd)
@@ -681,8 +746,11 @@ def run_worker(args):
             return 4
         port = int(payload["port"])
         log_line(fh, "[worker] 启动命令: %s" % " ".join(argv))
+        mode = str(payload.get("mode") or "restart")
+        if mode == "upgrade":
+            log_line(fh, "[worker] 模式: 升级（停旧 → 起新入口）")
 
-        if str(payload.get("mode") or "restart") == "start":
+        if mode == "start":
             # 冷启动：没有旧进程可停；但 worker 起来时端口可能已被别的东西占上（竞态）
             log_line(fh, "[worker] 模式: 冷启动（端口 %d）" % port)
             listening = netstat_listeners(port)
@@ -749,8 +817,11 @@ def main(argv=None):
     ap.add_argument("--check", "--dry-run", action="store_true", dest="check",
                     help="只探测监听进程与启动方式，不做任何操作")
     ap.add_argument("--cwd", default="", help="显式指定工作目录（默认按旧进程脚本路径推断）")
-    ap.add_argument("--start", action="store_true",
-                    help="冷启动：端口没有网关时用写死入口（dist\\WBRelay.exe 或 relay.py）拉起并等就绪")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--start", action="store_true",
+                      help="冷启动：端口没有网关时用写死入口（dist\\WBRelay.exe 或 relay.py）拉起并等就绪")
+    mode.add_argument("--upgrade", action="store_true",
+                      help="升级重启：停旧后拉起 dist\\WBRelay.exe，并保留旧实例参数")
     ap.add_argument("--wait", type=int, default=60, help="就绪等待上限（秒）")
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--handoff", default="", help=argparse.SUPPRESS)
@@ -798,16 +869,23 @@ def main(argv=None):
         return 3
 
     snap = identity_snapshot(info)
-    argv = split_cmdline(info.get("CommandLine") or "")
-    marker = command_marker(argv, args.port)
-    cwd = resolve_cwd(argv, args.cwd)
-    if not cwd or not os.path.isdir(cwd):
+    old_argv = split_cmdline(info.get("CommandLine") or "")
+    marker = command_marker(old_argv, args.port)
+    old_cwd = resolve_cwd(old_argv, args.cwd)
+    if not old_cwd or not os.path.isdir(old_cwd):
         print("[退出] 推断不出工作目录（旧进程用相对路径启动时无法定位），请用 --cwd 指定。")
         return 3
-    ok, why, argv = validate_start_argv(argv, cwd)
-    if not ok:
-        print("[退出] 启动命令不合规：%s" % why)
-        return 3
+    if args.upgrade:
+        argv, cwd, why = upgrade_start_argv(old_argv)
+        if not argv:
+            print("[退出] 升级启动命令不合规：%s" % why)
+            return 3
+    else:
+        cwd = old_cwd
+        ok, why, argv = validate_start_argv(old_argv, cwd)
+        if not ok:
+            print("[退出] 启动命令不合规：%s" % why)
+            return 3
 
     children = descendants(pid)
     owned, _reasons, bad = classify_own_children(children, snap, marker)
@@ -824,7 +902,8 @@ def main(argv=None):
         return 0
 
     payload = {
-        "mode": "restart", "pid": pid, "port": args.port, "cwd": cwd, "argv": argv,
+        "mode": "upgrade" if args.upgrade else "restart",
+        "pid": pid, "port": args.port, "cwd": cwd, "argv": argv,
         "identity": snap, "marker": marker,
         "parent_pid": os.getpid(), "created_at": time.time(),
         "argv_hash": hashlib.sha256(json.dumps(argv, ensure_ascii=False).encode("utf-8")).hexdigest(),

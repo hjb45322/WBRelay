@@ -7,6 +7,8 @@
   · 多种故障模式，覆盖重试边界：
       ok            正常 JSON / 正常 SSE
       http500       直接返回 500（可重试）
+      http400       返回 400（请求侧拒绝：不得冷却供应商，但应切换下一家）
+      http413       返回 413 并关闭连接（请求体超限：不得冷却、不再切换）
       invalid_json  返回 200 + 非 JSON 正文（输出前失败 → 可重试）
       empty_stream  返回 200 + 空的 SSE 正文（输出前失败 → 可重试）
       abort_stream  先发 200 + 一段 SSE，再粗暴断开（已开始输出 → 不得重试）
@@ -115,6 +117,15 @@ class MockUpstream(object):
                 if mode == "http500":
                     return self._json(500, {"error": {
                         "message": outer.error_body or ("mock %s 故意失败" % outer.name)}})
+                if mode == "http413":
+                    # 模拟上游按 body 上限「先拒后关」：回 413 并关闭连接
+                    # （真实上游 wb-proxy 就是这样，见 docs/方案-请求侧错误语义.md §1.2）
+                    self.close_connection = True
+                    return self._json(413, {"error": {
+                        "message": "payload too large (mock) > max limit"}})
+                if mode == "http400":
+                    return self._json(400, {"error": {
+                        "message": "prompt is too long (mock)"}})
                 if mode == "hang":
                     import time as _t
                     _t.sleep(outer.timeout_hold)

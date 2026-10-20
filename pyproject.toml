@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wbrelay-gateway"
-version = "1.1.0"
+version = "1.1.4"
 description = "多供应商自动路由网关：Codex 只连一个本地口，按模型名分流到多个上游，失败自动冷却切换"
 readme = "README.md"
 requires-python = ">=3.9"

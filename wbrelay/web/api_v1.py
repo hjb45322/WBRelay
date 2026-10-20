@@ -17,7 +17,7 @@ import urllib.request
 
 from ..log import _log
 from ..models import _natural_key
-from ..net import _urlopen, close_quietly
+from ..net import close_quietly, open_upstream_request
 from ..protocol import (_args_json, chat_to_response, chat_to_responses,
                         responses_to_chat, responses_to_chat_completion,
                         usage_to_chat)
@@ -32,6 +32,48 @@ from ..validate import check_model_name
 
 # 上游非流式响应体上限（防止畸形/恶意上游打满内存）
 MAX_UPSTREAM_BODY = 32 * 1024 * 1024
+
+# ---- 请求侧失败 vs 供应商侧失败（docs/方案-请求侧错误语义.md）----
+# 这些状态码表示「上游在拒绝这一份请求」，不是供应商不可用：给它打冷却会把
+# 「一次请求体超限」放大成「该供应商 60 秒内所有模型都不可用」（2026-10-19 实测：
+# 上游 413 → 冷却 60s → 客户端只看到 503「供应商都在冷却」）。
+REQUEST_SIDE_STATUSES = (400, 404, 413, 422)
+
+# 上游按 body 上限「先拒后关」时，客户端只拿到 WinError 10053/10054，无法从异常类型
+# 区分「上游拒收」与「网络抖动」。用「已经推了多少字节」做判据：8 MiB 是保守下限
+# （实测该量级上游已在 token 层顶到 1.048M 上限，16 MiB 触发字节墙）。
+LARGE_REQUEST_BODY = 8 * 1024 * 1024
+
+
+def _http_reason(code, detail=""):
+    """冷却原因文案：`HTTP 500 <正文>`；没有正文时**不能**重复一次状态码。
+
+    旧实现 `"HTTP %d %s" % (code, detail or "HTTP %d" % code)` 在正文读不到时会拼出
+    `HTTP 413 HTTP 413`（2026-10-19 线上 503 文案里就是这个）。
+    """
+    text = "HTTP %d" % code
+    return text + ((" " + detail) if detail else "")
+
+
+def _sent_bytes(exc):
+    """取 `_supplier_send` 记在异常上的「已推送请求体字节数」；没有则 0。"""
+    try:
+        return int(getattr(exc, "wbrelay_body_bytes", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _looks_like_oversize_abort(exc, body_bytes):
+    """发送阶段的连接中断是否应归为「上游按 body 上限先拒后关」。
+
+    只看两类证据：体量已经大到 8 MiB 量级，且确实是连接被掐断（而不是超时、DNS、
+    SSL 之类）。超时/其它网络异常仍按供应商故障处理。
+    """
+    if body_bytes < LARGE_REQUEST_BODY:
+        return False
+    kinds = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
+    # urllib 有时把底层异常包进 URLError.reason，两层都看
+    return isinstance(exc, kinds) or isinstance(getattr(exc, "reason", None), kinds)
 
 
 class _UpstreamRetryable(Exception):
@@ -144,8 +186,17 @@ class ApiV1Mixin:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         })
-        resp = _urlopen(req, supplier.get("timeout_sec", 120))
-        return resp, body
+        try:
+            resp = open_upstream_request(req, supplier.get("timeout_sec", 120))
+        except Exception as exc:
+            # 把「这次到底推了多少字节」带给上层：body 超限时上游会先拒后关，
+            # 异常本身（10053/10054）看不出是拒收还是网络抖动，只有体量能佐证。
+            try:
+                exc.wbrelay_body_bytes = len(data)
+            except Exception:
+                pass
+            raise
+        return resp, body, len(data)
 
     @staticmethod
     def _upstream_error_body(exc):
@@ -158,6 +209,36 @@ class ApiV1Mixin:
         finally:
             close_quietly(exc)
         return redact(text, 300)
+
+    def _reject_oversize(self, supplier, model, effort, body_bytes, note, detail, t_start):
+        """上游拒收本次请求体（413 / 大 body 被掐断）：不冷却、不再切换，直接回 413。
+
+        为什么不能当供应商故障：这是对「这一份请求体」的判决，供应商本身是健康的。
+        旧实现会给它打 60s 冷却，于是下一次请求连尝试都没有，客户端只看到 503，
+        真实原因（会话太大）被彻底掩盖（见 docs/方案-请求侧错误语义.md §1.3）。
+        """
+        name = supplier.get("name") or supplier.get("id")
+        try:
+            mib = float(body_bytes) / (1024.0 * 1024.0)
+        except Exception:
+            mib = 0.0
+        if body_bytes >= 1024 * 1024:
+            size_note = "请求体约 %.1f MiB" % mib
+        elif body_bytes:
+            size_note = "请求体 %d 字节" % body_bytes
+        else:
+            size_note = "请求体过大"
+        message = ("上游（%s）拒绝了本次请求：%s，%s。"
+                   "请精简会话历史或新建会话后重试；该供应商未被标记为故障。"
+                   % (name, size_note, note))
+        _log("[WBRelay] supplier %s 拒收请求体（不冷却、不再切换）：%s；%s%s"
+             % (supplier.get("id"), size_note, note,
+                ("；上游说明：" + detail) if (detail and detail not in note) else ""))
+        record_usage({"model": model, "error": True, "status": 413, "effort": effort,
+                      "message": redact(message, 300),
+                      "elapsed_ms": int((time.time() - t_start) * 1000),
+                      "realm": "none"})
+        return self._err(413, message, "invalid_request_error")
 
     def _supplier_dispatch(self, path, payload, first):
         model = str(payload.get("model") or "")
@@ -172,16 +253,45 @@ class ApiV1Mixin:
             if supplier_cooled(sid):
                 continue
             try:
-                resp, sent_body = self._supplier_send(path, payload, s)
+                resp, _sent_body, sent_bytes = self._supplier_send(path, payload, s)
             except urllib.error.HTTPError as exc:
                 detail = self._upstream_error_body(exc)
                 last_status = exc.code
-                last_error = detail or ("HTTP %d" % exc.code)
+                last_error = detail or ""
+                if exc.code == 413:
+                    # 请求体被上游拒收：不冷却、不再切换（换一家也是同样的体），
+                    # 直接把原因交给客户端，让它去精简会话。
+                    return self._reject_oversize(s, model, effort, _sent_bytes(exc),
+                                                 _http_reason(413, detail), detail, t_start)
+                if exc.code in REQUEST_SIDE_STATUSES:
+                    # 请求本身不合规（参数/路径/语义）：供应商仍然健康，不打冷却；
+                    # 仍按核心语义「失败必切换」试下一家。
+                    _log("[WBRelay] supplier %s 拒绝了本次请求（请求侧错误，不冷却）：%s -> next"
+                         % (sid, _http_reason(exc.code, last_error)))
+                    continue
                 supplier_mark_cool(sid, cooldown_429_secs() if exc.code == 429 else cooldown_secs(),
-                                   reason="HTTP %d %s" % (exc.code, last_error))
-                _log("[WBRelay] supplier %s failed: HTTP %d %s -> next" % (sid, exc.code, last_error))
+                                   reason=_http_reason(exc.code, last_error))
+                _log("[WBRelay] supplier %s failed: %s -> next"
+                     % (sid, _http_reason(exc.code, last_error)))
                 continue
             except Exception as exc:
+                body_bytes = _sent_bytes(exc)
+                if getattr(exc, "wbrelay_local_connect", False):
+                    # 本机 ready 队列没有在请求发送前拿到连接：这是本地
+                    # TCP/队列问题，不是供应商故障，不能把它放大成 60s
+                    # 供应商冷却；仍按“失败必切换”尝试下一家。
+                    last_status = 503
+                    last_error = redact(exc, 300)
+                    _log("[WBRelay] supplier %s 本地 ready 连接不可用（不冷却）：%s -> next"
+                         % (sid, last_error))
+                    continue
+                if _looks_like_oversize_abort(exc, body_bytes):
+                    # 已经推了 8 MiB 量级的请求体才被掐断：几乎必然是上游按 body 上限
+                    # 先拒后关（Windows 上表现为 10053/10054），不是供应商故障。
+                    return self._reject_oversize(s, model, effort, body_bytes,
+                                                 "上传请求体时连接被上游断开"
+                                                 "（极可能按请求体上限拒收）",
+                                                 redact(exc, 200), t_start)
                 last_status = 502
                 last_error = redact(exc, 300)
                 supplier_mark_cool(sid, cooldown_secs(), reason=last_error)
@@ -190,7 +300,7 @@ class ApiV1Mixin:
             try:
                 # 注意：这里返回前可能已经把响应头发给客户端；
                 # 之后的错误一律由 _supplier_output 内部消化，不再回到本循环。
-                return self._supplier_output(path, payload, s, resp, sent_body,
+                return self._supplier_output(path, payload, s, resp, sent_bytes,
                                              t_start, model, want_stream, effort)
             except _UpstreamRetryable as exc:
                 # 尚未向客户端输出 → 允许切换下一个供应商
@@ -212,7 +322,7 @@ class ApiV1Mixin:
         return self._err(last_status, "all suppliers failed: %s" % redact(last_error, 300),
                          "server_error" if last_status >= 500 else "invalid_request_error")
 
-    def _supplier_output(self, path, payload, supplier, resp, sent_body, t_start,
+    def _supplier_output(self, path, payload, supplier, resp, sent_bytes, t_start,
                          model, want_stream, effort=None):
         wire = supplier.get("wire_api", "responses")
         sid = supplier["id"]

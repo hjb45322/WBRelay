@@ -38,6 +38,7 @@ python tests/test_cost_rate.py              # 成本汇率配置项 usd_cny_rate
 python tests/test_log_rotation.py           # 日志多代轮转与并发写
 python tests/test_secret_redaction.py
 python tests/test_hardening.py
+python tests/test_payload_parser.py        # 32 MiB / chunked / 请求体错误语义
 python tests/test_package_layout.py
 python tests/test_sse_terminators.py
 python tests/test_protocol_matrix.py        # 协议矩阵四象限（chat/responses × chat/responses）

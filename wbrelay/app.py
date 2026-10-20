@@ -503,10 +503,66 @@ def main():
     tray.on_double_click = lambda icon, item: _tray_open(icon, item)
     threading.Thread(target=tray.run, daemon=True).start()
 
+    # 看板渲染自愈（2026-10-17 实录）：WebView2 的**渲染进程**可能在不重启宿主的情况下
+    # 消失 —— 宿主窗口、托盘、窗口几何事件全都还正常，但看板永久白屏。这里只做只读探测
+    # 与「重载看板」，绝不重启网关、绝不碰外部进程、不写任何文件。
+    _watch_stop = threading.Event()
+
+    def _watch_dashboard():
+        from . import webviewhealth
+        url = "http://127.0.0.1:%d/" % port
+        host_exe = os.path.basename(sys.executable)
+        policy = webviewhealth.RecoveryPolicy()
+        while not _watch_stop.wait(10.0):
+            try:
+                tree = webviewhealth.webview_tree(os.getpid())
+                suspect, why = policy.observe(tree["root"], tree["children"])
+                if not suspect:
+                    continue
+                # 只有常态观察「变少」时才做一次较慢的 CIM 权威核验。
+                pids = webviewhealth.renderer_pids(host_exe)
+                if pids is None:
+                    continue                      # 探测不了就不动作（宁漏勿误）
+                if pids:
+                    policy.recovered(tree["children"])
+                    continue
+                if not policy.can_attempt():
+                    continue
+                policy.note_attempt()
+                _log("[WBRelay] 看板渲染进程已消失（%s），自动重载看板" % why)
+                try:
+                    window.load_url(url)
+                except Exception as exc:
+                    _log("[WBRelay] 自动重载失败（%s），改用系统浏览器打开看板" % exc)
+                    try:
+                        webbrowser.open(url)
+                    except Exception:
+                        pass
+                    return
+                if _watch_stop.wait(15.0):
+                    return
+                again = webviewhealth.renderer_pids(host_exe)
+                if again is None:
+                    continue
+                if not again:
+                    _log("[WBRelay] 自动重载后仍无渲染进程，改用系统浏览器打开看板")
+                    try:
+                        webbrowser.open(url)
+                    except Exception:
+                        pass
+                    return
+                _log("[WBRelay] 看板已自动恢复（渲染进程 %s）" % (again,))
+                policy.recovered()
+            except Exception as exc:
+                _log("[WBRelay] 看板自愈探测异常（下次继续）：%s" % exc)
+
+    threading.Thread(target=_watch_dashboard, daemon=True).start()
+
     _log("[WBRelay] 独立窗口已启动，关闭窗口最小化到托盘")
     try:
         webview.start()
     finally:
+        _watch_stop.set()
         ides_restore()
 
 

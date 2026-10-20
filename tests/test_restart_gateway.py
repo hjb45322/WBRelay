@@ -20,6 +20,7 @@
   G14 冷启动竞态：worker 起来时端口已被监听 → 拒绝(5)，不启动
   G15 静态审计：仍无 --force/--cmd/--move；--start 不接受命令/位置参数
   G16 start.bat 指向 dist\WBRelay.exe（防死链回归）
+  G18 升级重启：写死新入口、保留旧参数、拒绝相对 --data-dir / 互斥参数
 
 用法：python tests/test_restart_gateway.py
 """
@@ -61,7 +62,8 @@ def proc(pid, parent, exe, cmd, created="20261012000000.000000+480"):
 
 def ns(**kw):
     base = {"worker": False, "handoff": "", "token": "", "log": "",
-            "port": 19999, "check": True, "cwd": "", "wait": 5, "start": False}
+            "port": 19999, "check": True, "cwd": "", "wait": 5,
+            "start": False, "upgrade": False}
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -430,6 +432,108 @@ def main():
         for flag in ("--force", "--cmd", "--move"):
             check("G9b 没有注册 %s 参数" % flag,
                   "add_argument(\"%s\"" % flag not in src)
+
+        # ---- G17 版本后缀 EXE（Release 常用副本）纳入值守路径 ----
+        # 背景：2026-10-17 在用实例由 dist\WBRelay-1.1.0.exe 启动，旧规则只认
+        # 精确文件名 wbrelay.exe，导致 R7 唯一合规重启路径整条失效。
+        ver_in_repo = proc(5000, 4, os.path.join(REPO, "dist", "WBRelay-1.1.0.exe"),
+                           '"%s"' % os.path.join(REPO, "dist", "WBRelay-1.1.0.exe"),
+                           created="20261018000001.000000+480")
+        check("G17a 仓库内版本后缀 EXE（WBRelay-1.1.0.exe）→ 通过",
+              mod.classify_wbrelay(ver_in_repo, dict(state_ok), 19999)[0] is True,
+              mod.classify_wbrelay(ver_in_repo, dict(state_ok), 19999)[1])
+
+        ver_outside = proc(5001, 4, "C:\\Windows\\Temp\\WBRelay-1.1.0.exe",
+                           '"C:\\Windows\\Temp\\WBRelay-1.1.0.exe"',
+                           created="20261018000002.000000+480")
+        check("G17b 仓库外的版本后缀 EXE → 仍然拒绝",
+              mod.classify_wbrelay(ver_outside, dict(state_ok), 19999)[0] is False)
+
+        ver_bad = proc(5002, 4, os.path.join(REPO, "dist", "WBRelay-abc.exe"),
+                       '"%s"' % os.path.join(REPO, "dist", "WBRelay-abc.exe"),
+                       created="20261018000003.000000+480")
+        check("G17c 非数字版本段（WBRelay-abc.exe）→ 拒绝",
+              mod.classify_wbrelay(ver_bad, dict(state_ok), 19999)[0] is False)
+        check("G17d 文件名判定：规范名与数字版本后缀通过，其余拒绝",
+              mod.is_frozen_exe_name("WBRelay.exe") is True
+              and mod.is_frozen_exe_name("wbrelay-1.1.0.exe") is True
+              and mod.is_frozen_exe_name("WBRelay-.exe") is False
+              and mod.is_frozen_exe_name("notwbrelay.exe") is False
+              and mod.is_frozen_exe_name("WBRelay.exe.bak") is False)
+
+        # validate_start_argv 也要接受版本后缀（重启沿用的是旧进程原命令行）
+        g17_repo = tempfile.mkdtemp(prefix="wbrelay-g17-repo-")
+        g17_old_root = mod.REPO_ROOT
+        try:
+            os.makedirs(os.path.join(g17_repo, "dist"), exist_ok=True)
+            g17_exe = os.path.join(g17_repo, "dist", "WBRelay-1.1.0.exe")
+            with io.open(g17_exe, "wb") as fh:
+                fh.write(b"MZ")
+            mod.REPO_ROOT = g17_repo
+            ok17, why17, argv17 = mod.validate_start_argv([g17_exe], os.path.join(g17_repo, "dist"))
+            check("G17e 启动白名单接受仓库内版本后缀 EXE",
+                  ok17 is True and argv17 == [g17_exe], why17)
+            outside17 = os.path.join(tempfile.gettempdir(), "WBRelay-1.1.0.exe")
+            check("G17f 启动白名单仍拒绝仓库外的版本后缀 EXE",
+                  mod.validate_start_argv([outside17], tempfile.gettempdir())[0] is False)
+        finally:
+            mod.REPO_ROOT = g17_old_root
+            shutil.rmtree(g17_repo, ignore_errors=True)
+
+        check("G17g 冷启动入口仍是规范名 dist\\WBRelay.exe（重启一次即自愈回规范名）",
+              'os.path.join(REPO_ROOT, "dist", "WBRelay.exe")' in src)
+
+        # ---- G18 升级重启（--upgrade）：停旧后切写死新入口 ----------------
+        g18_repo = tempfile.mkdtemp(prefix="wbrelay-g18-repo-")
+        g18_old_root = mod.REPO_ROOT
+        try:
+            g18_dist = os.path.join(g18_repo, "dist")
+            os.makedirs(g18_dist, exist_ok=True)
+            g18_new = os.path.join(g18_dist, "WBRelay.exe")
+            g18_old = os.path.join(g18_dist, "WBRelay-1.1.0.exe")
+            g18_relay = os.path.join(g18_repo, "relay.py")
+            for p in (g18_new, g18_old, g18_relay):
+                with io.open(p, "wb") as fh:
+                    fh.write(b"MZ" if p.endswith(".exe") else b"# test entry\n")
+            mod.REPO_ROOT = g18_repo
+            data_arg = os.path.join(tmp, "data-upgrade")
+            argv18, cwd18, why18 = mod.upgrade_start_argv(
+                [g18_old, "--data-dir", data_arg, "--no-ide-inject", "--port", "19999"])
+            check("G18a 升级入口切到规范名并保留旧参数",
+                  argv18[0] == g18_new
+                  and argv18[1:] == ["--data-dir", data_arg, "--no-ide-inject", "--port", "19999"],
+                  "%r / %r" % (argv18, why18))
+            check("G18b 升级入口 cwd 为仓库根",
+                  os.path.normcase(cwd18) == os.path.normcase(g18_repo), repr(cwd18))
+
+            argv18py, _cwd18py, why18py = mod.upgrade_start_argv(
+                [python_exe, g18_relay, "--data-dir", data_arg, "--port", "19999"])
+            check("G18c 源码入口升级也切到规范名并保留参数",
+                  argv18py[0] == g18_new
+                  and argv18py[1:] == ["--data-dir", data_arg, "--port", "19999"],
+                  "%r / %r" % (argv18py, why18py))
+
+            argv_bad, _cwd_bad, why_bad = mod.upgrade_start_argv(
+                [g18_old, "--data-dir", "relative-data"])
+            check("G18d 相对 --data-dir 在升级模式下拒绝",
+                  argv_bad == [] and "绝对路径" in why_bad, repr(why_bad))
+
+            raised = False
+            old_stderr = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                mod.main(["--start", "--upgrade"])
+            except SystemExit:
+                raised = True
+            finally:
+                sys.stderr = old_stderr
+            check("G18e --start 与 --upgrade 互斥", raised)
+            check("G18f 仍无任意 --cmd / --force / --move",
+                  all(("add_argument(\"%s\"" % f) not in src
+                      for f in ("--cmd", "--force", "--move")))
+        finally:
+            mod.REPO_ROOT = g18_old_root
+            shutil.rmtree(g18_repo, ignore_errors=True)
     finally:
         mod.subprocess.call, mod.subprocess.Popen, mod.subprocess.check_output = real_call, real_popen, real_check
         mod.time.sleep = real_sleep

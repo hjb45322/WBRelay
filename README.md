@@ -9,7 +9,7 @@ Codex ──► WBRelay（一个本地口） ──► 上游供应商 A（优�
                                  └─► 上游供应商 C（B 失败时）
 ```
 
-> 状态：**1.1.0**，已公开发布（MIT）。架构与打包仍在演进；
+> 状态：**1.1.4**，已公开发布（MIT）。架构与打包仍在演进；
 > 内部资料与发布门禁见本文末尾「发布状态与内部资料」。
 
 ---
@@ -49,7 +49,7 @@ python relay.py --data-dir <临时目录> --no-ide-inject --port 18789 --headles
 | `--headless` | 不创建窗口与托盘（自动化与 CI 用） |
 | `--port <n>` | 监听端口（默认 8789） |
 
-对应环境变量：`WBRELAY_DATA_DIR` / `WBRELAY_NO_IDE_INJECT` / `WBRELAY_READONLY` / `WBRELAY_HEADLESS`。
+对应环境变量：`WBRELAY_DATA_DIR` / `WBRELAY_NO_IDE_INJECT` / `WBRELAY_READONLY` / `WBRELAY_HEADLESS`；请求体上限可用 `WBRELAY_MAX_PAYLOAD` 设置为十进制字节数（默认 32 MiB，硬上限 128 MiB）。
 
 隔离启动器（空白测试配置，不读取在用数据）：
 
@@ -178,6 +178,7 @@ python tests/test_atomic_writes.py       # 原子写与失败回滚
 python tests/test_routing_semantics.py   # 核心语义 + 重试边界（进程内 mock 上游）
 python tests/test_secret_redaction.py    # 机密回显与日志脱敏（假密钥）
 python tests/test_hardening.py           # 边界校验 / Host-Origin 门禁 / 代理上限
+python tests/test_payload_parser.py      # 32 MiB / chunked / 411 / 413 请求体语义
 python tests/test_sse_terminators.py     # SSE 终止判定（按 wire protocol 分别判定）
 python tests/test_protocol_matrix.py     # 协议矩阵四象限（chat/responses × chat/responses）
 python tests/test_opencode_inject.py     # OpenCode 注入形态：档位 variants / 无效字段 / 幂等

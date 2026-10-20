@@ -74,8 +74,17 @@ jobs:
       - name: 核心语义与重试边界（进程内 mock 上游）
         run: python tests/test_routing_semantics.py
 
+      - name: 请求侧错误语义（413 不冷却不切换 / 400 不冷却仍切换 / 大 body 判定）
+        run: python tests/test_request_side_errors.py
+
+      - name: 本地上游 ready 连接队列（后台预热 / 动态水位 / 10060 恢复）
+        run: python tests/test_local_ready_pool.py
+
       - name: 机密回显与日志脱敏
         run: python tests/test_secret_redaction.py
+
+      - name: 请求体解析（32 MiB / chunked / 411 / 413 / 错误语义）
+        run: python tests/test_payload_parser.py
 
       - name: 安全加固（边界校验 / Host-Origin / 代理停用）
         run: python tests/test_hardening.py

@@ -78,6 +78,15 @@ def with_recorder(rec, fn):
         upd._urlopen = old
 
 
+def future_tag():
+    """基于当前版本生成更高补丁号，避免发布升版时把 U3 固化成旧版本。"""
+    parts = list(upd.parse_version(upd.__version__))
+    while len(parts) < 3:
+        parts.append(0)
+    parts[2] += 1
+    return "v" + ".".join(str(x) for x in parts[:3])
+
+
 def main():
     check("U0 wbrelay.update 可导入且不联网", callable(upd.check))
 
@@ -101,7 +110,9 @@ def main():
     check("U1 读配置不会联网（默认零外联）", rec0.calls == [], repr(len(rec0.calls)))
 
     # ---- U3 正常路径 ----
-    rec = Recorder({"tag_name": "v1.1.1", "html_url": "https://github.com/hjb45322/WBRelay/releases/tag/v1.1.1"})
+    new_tag = future_tag()
+    rec = Recorder({"tag_name": new_tag,
+                    "html_url": "https://github.com/hjb45322/WBRelay/releases/tag/" + new_tag})
     out = with_recorder(rec, upd.check)
     check("U3a 有新版 → has_update=True", out.get("has_update") is True, repr(out))
     check("U3b 只发一个请求", len(rec.calls) == 1, repr(len(rec.calls)))

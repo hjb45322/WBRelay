@@ -2,6 +2,143 @@
 
 本文件记录面向使用者的变更。
 
+## 1.1.4 — 2026-10-21 ready 队列探测后立即预热
+
+### 修复
+
+- 压力测试发现：首次请求探测到可预热上游后，ready 队列要等下一次请求才创建；
+  探测完成到下一请求之间仍没有 idle 连接。现在探测成功后立即启动后台预热，
+  该空窗也被消除。
+- `tests/test_local_ready_pool.py` 增至 **13 通过 / 0 失败**，新增“探测成功后立即预热”断言。
+
+### 验证
+
+- 1.1.3 → 1.1.4 的同一压力脚本覆盖：
+  - 新版：停监听后仍用已建立 ready 连接完成 4 次请求；
+  - 旧版：同样条件下 4 次请求全部失败；
+  - 新版 32 个并发流式请求全部成功（0.781 秒完成）。
+- 最终 `dist\WBRelay.exe` / `dist\WBRelay-1.1.4.exe` SHA256：
+  `1C36B2ED55CA19E98F77E5B6970D3082186DC7B29AAA676064FC02F8ED1BE9FA`；
+  已按 R7 升级到 PID `36016`，重启后 `/api/state` 返回 `1.1.4`、0 家冷却。
+
+## 1.1.3 — 2026-10-21 本地上游 ready 连接队列
+
+### 修复
+
+- **本机短连接偶发 `WinError 10060` 被放大为 503**：WBRelay 到本机反代的每个模型请求
+  原先都会重新建立 TCP 连接；本机高频短连接触发 Windows `Tcpip 4227` 后，一次瞬时建连失败
+  会让唯一可路由供应商冷却 60 秒，后续请求直接返回
+  `503 no usable supplier ... 供应商都在冷却`。
+- 新增 `wbrelay/localpool.py`：只在 `127.0.0.1` / `localhost` / `::1` 上游启用 ready 队列，
+  后台维护已完成 TCP 握手的本地连接（常态 8 个，活跃并发升高时扩到 12 个，最大 16 个）。
+  首次本地请求先探测 `Server` 头；未识别或不支持并发的本地服务继续走原路径，
+  避免 idle 连接饿死单线程服务。
+- ready 队列补连失败只做后台退避重试；请求发送前的本地队列耗尽被标记为
+  `LocalConnectError`，不触发供应商 60 秒冷却，仍保持“失败必切换 / 全败必报错”的语义。
+- 非本地供应商、模型拉取、OpenRouter、面板代理和既有请求侧错误语义不变。
+
+### 验证
+
+新增 `tests/test_local_ready_pool.py`，**12 通过 / 0 失败**；真机连续两次只读访问本机
+`/v1/models` 通过，第二次命中 ready 队列，队列补回 8 个 idle 连接。方案见
+`docs/方案-本地上游预热连接池.md`。
+- `dist\WBRelay.exe` / `dist\WBRelay-1.1.3.exe` SHA256 为
+`8059D0529B80FDBE57B1211A07A8DEE6FD145EC306666ABC5463A941C745C6E1`；已按 R7
+通过值守进程升级到 PID `29216`，重启后 `/api/state` 返回 `1.1.3`、9 家供应商、0 家冷却。
+
+## 1.1.2 — 2026-10-19 请求侧错误语义（413 不再冷却供应商）
+
+### 修复
+
+- **一次「请求体太大」会被放大成「供应商 60 秒不可用」**：上游对过大请求体回 413 时，
+  WBRelay 把它当成供应商故障打了 60 秒冷却，之后的请求连尝试都没有，客户端只能看到
+  `503 no usable supplier ... 供应商都在冷却`；真实原因（会话太大）被完全掩盖。
+- 现在 **413 / 400 / 404 / 422 属于「请求侧错误」**，不再冷却供应商：
+  - `413`（请求体超限）：直接把 HTTP 413 交给客户端，文案含**请求体大小**与
+    「请精简会话历史或新建会话」，并说明该供应商未被标记为故障；不再切下一家
+    （换一家也是同样的体，只会重复上传）。
+  - `400 / 404 / 422`：不冷却，但仍按「失败必切换」试下一家。
+- 上游按 body 上限**先拒后关**时（客户端只看到 `WinError 10053/10054`，没有状态码），
+  用「已推送请求体 ≥ 8 MiB」判定为同一类问题，同样不冷却、返回 413 并说明原因。
+- 冷却原因文案不再重复状态码（此前会打出 `HTTP 413 HTTP 413`）。
+- 供应商侧失败（5xx / 429 / 401 / 403 / 小 body 网络异常）行为不变，仍冷却并切换。
+
+### 验证
+
+新增 `tests/test_request_side_errors.py`，**17 通过 / 0 失败**，覆盖 413 不冷却不切换、
+400 不冷却仍切换、文案不重复、大 body 判定阈值、500 仍冷却、用量口径（`realm=none`）；
+`test_routing_semantics`（33/0）、`test_protocol_matrix`（28/0）、`test_hardening`（57/0）、
+`test_sse_terminators`（21/0）、`test_http_error_handling`（26/0）回归通过。
+方案见 `docs/方案-请求侧错误语义.md`。
+
+> 备注：8 MiB 时上游已在 token 层报 `prompt is too long: 1176612 tokens > 1048576 maximum`，
+> 所以真正的上限是模型的 1.048M token，**调大 `WB_MAX_PAYLOAD_BYTES` 不能绕过它**。
+
+---
+
+## 1.1.1 — 2026-10-19 长会话请求体解析修复
+
+### 修复
+
+- **长会话被误报 `invalid json`**：Codex 的 `POST /v1/responses` 请求体超过旧的 8 MiB 上限时，
+  WBRelay 在解析前直接返回 HTTP 400 `invalid json`；chunked 请求也同样无法读取。
+  旧错误把「超过限制」「缺少长度」「chunked 未支持」和真正的 JSON 语法错误混在一起，
+  长会话、fork 上下文和工具输出较多时表现最明显。
+- 请求体默认上限提高到 **32 MiB**，支持 `WBRELAY_MAX_PAYLOAD`（十进制字节数，硬上限 128 MiB）；
+  该值非法时回退默认值，不允许无限大。
+- 新增完整的 `Content-Length` / `Transfer-Encoding: chunked` 解析：
+  - 超过上限 → HTTP 413 `payload too large`；
+  - 缺少长度且非 chunked → HTTP 411 `length required`；
+  - `CL + TE`、重复/非法 `Content-Length`、非 chunked TE → HTTP 400 `invalid request framing`；
+  - 截断、chunked 格式错误、非法 UTF-8、真正 JSON 错误分别返回明确消息；
+  - 解析失败关闭连接，避免未读正文污染下一请求。
+- 失败日志只记录 `Content-Length` / `Transfer-Encoding` / 已读字节数 / 上限与原因，
+  **不记录请求正文、prompt、工具输出或 Authorization / Bearer token**。
+
+### 验证
+
+新增 `tests/test_payload_parser.py`，**32 通过 / 0 失败**，覆盖 32 MiB 上限、9 MiB 实测请求、
+chunked、411/413/400 错误语义、连接关闭后继续服务与日志脱敏；既有 hardening（57/0）/ HTTP 异常收敛（26/0）/
+路由与协议矩阵回归通过。值守工具新增 `--upgrade`，`tests/test_restart_gateway.py`
+**77 通过 / 0 失败**；真机已升级到 1.1.1，9 MiB 与约 14.5 MiB 请求及 chunked 回归均通过。
+方案见 `docs/方案-长会话请求体解析修复.md`。
+
+### 构建与升级
+
+按 `WBRelay.spec` 重新打包；运行版按 R7 通过
+`python tools/restart-gateway.py --upgrade` 由值守进程停旧、起新并轮询就绪，
+随后用原长会话与 chunked / 9 MiB 请求各做一次回归。
+
+---
+
+## 未发布 — 看板白屏自愈 + 值守工具识别版本后缀 EXE
+
+### 修复
+
+- **看板白屏后无法自愈**：2026-10-17 实录 —— WebView2 的**渲染进程**（`--type=renderer`）
+  在没有崩溃记录的情况下消失；宿主窗口、托盘、窗口几何事件全部正常，但看板变成永久白屏，
+  只能整进程重启。现由 `wbrelay/webviewhealth.py` + `app.py` 的守护线程处理：
+  常态用 Toolhelp32 快照观察（几乎零成本），只有「WebView2 子进程数比峰值变少」时才做一次
+  CIM 权威核验；确认渲染进程真的没了就重载看板，重载后仍无进程则回退到系统浏览器打开看板。
+  **只读探测**：不结束/不启动任何进程、不写盘、不动外部服务；探测失败一律不动作（宁漏勿误）。
+
+- **`tools/restart-gateway.py` 无法重启带版本后缀的在用实例**：白名单常量只认精确文件名
+  `WBRelay.exe`，而 Release 常用的副本叫 `WBRelay-1.1.0.exe`（与规范名逐字节一致）。
+  后果是 R7 唯一合规重启路径对该实例**整条失效**，只能人工托盘退出再手工启动。
+  现接受 `WBRelay.exe` 或 `WBRelay-<数字版本>.exe`，**只放宽文件名这一层**：
+  仓库目录前缀、`/api/state` 协议、端口监听、worker 二次身份复核全部不变；
+  冷启动入口仍是规范名 `dist\WBRelay.exe`，重启一次即自愈回规范名。
+
+### 验证
+
+`tests/test_restart_gateway.py` 新增 G17a–G17g，**71 通过 / 0 失败**；
+新增 `tests/test_webview_health.py`，**21 通过 / 0 失败**；
+`test_e2e` 25 / `test_readonly_zero_write` 43 / `test_package_layout` 24 /
+`test_data_path_policy` 28 / `test_settings_autostart` 21 / `test_window_state` 13 全部 0 失败；
+`tools/scan_sensitive.py` 退出码 0。方案见 `docs/方案-看板白屏自愈与重启入口修复.md`。
+
+---
+
 ## 未发布 — 值守工具支持冷启动 + `start.bat` 修复
 
 > 只改开发工具与启动脚本，**不影响网关产品代码**，EXE 无需重打包。

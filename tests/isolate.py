@@ -57,7 +57,7 @@ _REAL_HOME = os.environ.get("HOME") or os.path.expanduser("~")
 
 _ENV_KEYS = ("APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOME",
              "DSH_HOME", "CRUSH_GLOBAL_DATA", "CRUSH_GLOBAL_CONFIG", "XDG_DATA_HOME",
-             "WBRELAY_DATA_DIR", "WBRELAY_UPSTREAM_DIR",
+             "WBRELAY_DATA_DIR", "WBRELAY_UPSTREAM_DIR", "WBRELAY_MAX_PAYLOAD",
              "WBRELAY_READONLY", "WBRELAY_NO_IDE_INJECT", "WBRELAY_HEADLESS")
 _ENV_BACKUP = {}
 _TMP_PREFIX = "wbrelay-test-"
@@ -88,6 +88,7 @@ def bootstrap(readonly=False, port=None, extra_args=(), keep_argv=False):
         # 受控因素：清掉它们，由本次测试的参数决定运行模式
         for k in ("WBRELAY_DATA_DIR", "WBRELAY_UPSTREAM_DIR",
                   "DSH_HOME", "CRUSH_GLOBAL_DATA", "CRUSH_GLOBAL_CONFIG", "XDG_DATA_HOME",
+                  "WBRELAY_MAX_PAYLOAD",
                   "WBRELAY_READONLY", "WBRELAY_NO_IDE_INJECT", "WBRELAY_HEADLESS"):
             os.environ.pop(k, None)
         atexit.register(cleanup)

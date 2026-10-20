@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 from .. import state
+from ..log import _log
 from ..paths import DASHBOARD_PATH, MAX_PAYLOAD, READONLY
 from ..settings import admin_token_ok, auth_key_ok
 
@@ -14,6 +15,7 @@ from .api_update import ApiUpdateMixin
 from .api_upstream import ApiUpstreamMixin
 from .api_usage import ApiUsageMixin
 from .api_v1 import ApiV1Mixin
+from .payload import PayloadError, read_json_payload
 
 
 # /v1/* 入口：默认无鉴权（本机单用户设计的一部分，见 SECURITY.md），
@@ -45,21 +47,36 @@ class Handler(ApiV1Mixin, ApiUpstreamMixin, ApiUsageMixin, ApiAdminMixin,
         self.end_headers()
         self.wfile.write(data)
 
-    def _err(self, code, message, etype="invalid_request_error"):
-        self._json(code, {"error": {"message": message, "type": etype, "code": code}})
+    def _err(self, code, message, etype="invalid_request_error", extra_headers=None):
+        self._json(code, {"error": {"message": message, "type": etype, "code": code}},
+                  extra_headers=extra_headers)
+
+    def _header_summary(self, name, limit=160):
+        """日志只记帧头摘要：截断、不展开正文。"""
+        values = self.headers.get_all(name) or []
+        text = " | ".join(str(v) for v in values)
+        if len(text) > limit:
+            text = text[:max(0, limit - 3)] + "..."
+        return text or "-"
 
     def _payload(self):
         try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except (TypeError, ValueError):
-            return None
-        if length <= 0 or length > MAX_PAYLOAD:
-            return None
-        raw = self.rfile.read(length)
-        try:
-            return json.loads(raw.decode("utf-8", "replace"))
-        except Exception:
-            return None
+            return read_json_payload(self.headers, self.rfile, MAX_PAYLOAD)
+        except PayloadError as exc:
+            _log(
+                "[WBRelay] payload rejected: content_length=%s transfer_encoding=%s "
+                "bytes_read=%d limit=%d reason=%s"
+                % (self._header_summary("Content-Length"),
+                   self._header_summary("Transfer-Encoding"),
+                   exc.bytes_read, MAX_PAYLOAD, exc.message)
+            )
+            raise
+
+    def _payload_rejected(self, exc):
+        # 失败请求可能还有未读正文；必须关闭连接，避免它被解释成下一请求。
+        self.close_connection = True
+        return self._err(exc.status, exc.message,
+                         extra_headers={"Connection": "close"})
 
     def _bearer(self):
         h = self.headers.get("Authorization") or ""
@@ -200,6 +217,12 @@ class Handler(ApiV1Mixin, ApiUpstreamMixin, ApiUsageMixin, ApiAdminMixin,
         return self._err(404, "not found")
 
     def do_POST(self):
+        try:
+            return self._handle_post()
+        except PayloadError as exc:
+            return self._payload_rejected(exc)
+
+    def _handle_post(self):
         path = urlparse(self.path).path
         if len(path) > 1 and path.endswith("/"):
             path = path[:-1]
@@ -256,10 +279,7 @@ class Handler(ApiV1Mixin, ApiUpstreamMixin, ApiUsageMixin, ApiAdminMixin,
         if path in V1_CHAT_PATHS:
             if not self._api_ok():
                 return self._err(401, "invalid api key")
-            payload = self._payload()
-            if payload is None:
-                return self._err(400, "invalid json")
-            return self._dispatch(path, payload)
+            return self._dispatch(path, self._payload())
         return self._err(404, "not found")
 
     def do_OPTIONS(self):

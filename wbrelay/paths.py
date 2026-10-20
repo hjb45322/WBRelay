@@ -150,5 +150,25 @@ def _resolve_dashboard():
 DASHBOARD_PATH = _resolve_dashboard()
 DEFAULT_PORT = 8789
 WBRELAY_VERSION = __version__
-MAX_PAYLOAD = 8 * 1024 * 1024
+MAX_PAYLOAD_DEFAULT = 32 * 1024 * 1024
+MAX_PAYLOAD_CAP = 128 * 1024 * 1024
+
+
+def max_payload_from_env(raw=None):
+    """WBRELAY_MAX_PAYLOAD：十进制字节数；非法值回退默认，超过硬上限截断。"""
+    if raw is None:
+        raw = os.environ.get("WBRELAY_MAX_PAYLOAD", "")
+    text = str(raw or "").strip()
+    if not text:
+        return MAX_PAYLOAD_DEFAULT
+    try:
+        value = int(text, 10)
+    except (TypeError, ValueError):
+        return MAX_PAYLOAD_DEFAULT
+    if value <= 0:
+        return MAX_PAYLOAD_DEFAULT
+    return min(value, MAX_PAYLOAD_CAP)
+
+
+MAX_PAYLOAD = max_payload_from_env()
 MODEL_FETCH_TIMEOUT = 30
